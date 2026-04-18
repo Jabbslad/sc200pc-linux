@@ -1,0 +1,46 @@
+From: omarchy-extras <jabbslad@users.noreply.github.com>
+Date: Fri, 17 Apr 2026 21:40:00 +0100
+Subject: [PATCH] media: pci: ipu-bridge: add Samsung SC200PC (SSLC2000)
+
+The Samsung Galaxy Book6 Pro (NP940XJG-KGDUK, Panther Lake) exposes its
+internal front camera as ACPI HID "SSLC2000". The sensor is a SmartSens /
+Samsung-branded SC200PC at I2C3/0x36.
+
+`intel-ipu7` falls back to `ipu_bridge_init(..., ipu_bridge_parse_ssdb)` when
+the IPU PCI device has no firmware-node graph, but `ipu-bridge` only creates
+software-node endpoints for sensors listed in `ipu_supported_sensors[]`.
+
+Without an SSLC2000 entry:
+
+  - a sensor driver can still bind at the I2C level via ACPI
+  - the sensor's ACPI device has a primary fwnode only, no secondary
+    software-node graph
+  - `intel-ipu7` logs "no subdev found in graph" and never registers a
+    media entity for the sensor
+
+Add SSLC2000 to the supported-sensors table. Follow the INTC10C5 precedent
+and leave `nr_link_freqs = 0`: the link-frequencies fwnode property is then
+omitted (see `ipu_bridge_create_fwnode_properties`, cfg->nr_link_freqs > 0
+guard), which is correct while the link-frequency value for this sensor is
+still unconfirmed. The companion sensor driver may expose link_freq via a
+V4L2 control once finalized.
+
+Base: Linux v6.19.10 (byte-identical to archlinux/linux v6.19.10-arch1).
+
+Signed-off-by: omarchy-extras <jabbslad@users.noreply.github.com>
+---
+ drivers/media/pci/intel/ipu-bridge.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/media/pci/intel/ipu-bridge.c b/drivers/media/pci/intel/ipu-bridge.c
+--- a/drivers/media/pci/intel/ipu-bridge.c
++++ b/drivers/media/pci/intel/ipu-bridge.c
+@@ -95,6 +95,8 @@ static const struct ipu_sensor_config ipu_supported_sensors[] = {
+ 	IPU_SENSOR_CONFIG("OVTI8856", 3, 180000000, 360000000, 720000000),
+ 	/* Sony IMX471 */
+ 	IPU_SENSOR_CONFIG("SONY471A", 1, 200000000),
++	/* Samsung/SmartSens SC200PC */
++	IPU_SENSOR_CONFIG("SSLC2000", 0),
+ 	/* Toshiba T4KA3 */
+ 	IPU_SENSOR_CONFIG("XMCC0003", 1, 321468000),
+ };

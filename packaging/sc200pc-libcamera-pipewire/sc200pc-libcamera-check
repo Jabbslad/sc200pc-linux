@@ -1,0 +1,92 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "==> SC200PC libcamera/PipeWire diagnostic"
+
+need_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing command: $1"
+    return 1
+  fi
+}
+
+fail=0
+
+for cmd in media-ctl v4l2-ctl cam wpctl pw-cli; do
+  need_cmd "$cmd" || fail=1
+done
+
+echo
+echo "==> Kernel/media graph"
+if [[ -e /dev/video0 ]]; then
+  echo "found /dev/video0"
+else
+  echo "missing /dev/video0"
+  fail=1
+fi
+
+if command -v media-ctl >/dev/null 2>&1 && [[ -e /dev/media0 ]]; then
+  if media-ctl -p 2>/dev/null | grep -q "sc200pc"; then
+    echo "media graph contains sc200pc"
+  else
+    echo "media graph does not contain sc200pc"
+    fail=1
+  fi
+fi
+
+echo
+echo "==> Raw capture smoke test"
+if command -v v4l2-ctl >/dev/null 2>&1 && [[ -e /dev/video0 ]]; then
+  if v4l2-ctl --stream-mmap --stream-count=1 -d /dev/video0 >/dev/null 2>&1; then
+    echo "raw capture on /dev/video0: OK"
+  else
+    echo "raw capture on /dev/video0: FAILED"
+    fail=1
+  fi
+fi
+
+echo
+echo "==> libcamera enumeration"
+if command -v cam >/dev/null 2>&1; then
+  cam_out="$(cam -l 2>&1)" || { echo "cam -l failed"; fail=1; }
+  echo "$cam_out"
+  if grep -q "Failed to create camera sensor helper for sc200pc" <<<"$cam_out"; then
+    echo
+    echo "WARNING: libcamera is missing the SC200PC CameraSensorHelper."
+    echo "         AGC will not converge; frames will be dark and green-tinted."
+    echo "         Run: rebuild-libcamera-with-sc200pc-support"
+    fail=1
+  fi
+  if grep -q "No static properties available for 'sc200pc'" <<<"$cam_out"; then
+    echo
+    echo "WARNING: libcamera has no CameraSensorProperties entry for sc200pc."
+    echo "         Sensor delays / unit cell size fall back to defaults."
+    echo "         Run: rebuild-libcamera-with-sc200pc-support"
+    fail=1
+  fi
+fi
+
+echo
+echo "==> PipeWire state"
+if command -v wpctl >/dev/null 2>&1; then
+  wpctl status 2>/dev/null || echo "wpctl status failed"
+fi
+
+if command -v pw-cli >/dev/null 2>&1; then
+  if pw-cli ls Node 2>/dev/null | grep -qi "camera\\|libcamera\\|video"; then
+    echo "PipeWire exposes video-related nodes"
+  else
+    echo "PipeWire does not currently expose any obvious camera node"
+  fi
+fi
+
+echo
+if [[ "$fail" -eq 0 ]]; then
+  echo "==> Diagnostic completed without hard failures."
+  echo "Next manual check:"
+  echo "    qcam"
+  echo "    Chromium -> camera permissions / preview"
+else
+  echo "==> Diagnostic found failures. Fix kernel/media path before relying on browser integration."
+  exit 1
+fi

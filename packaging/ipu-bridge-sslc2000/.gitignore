@@ -1,0 +1,12 @@
+pkg/
+src/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+*.ko
+*.ko.zst
+*.o
+.*.cmd
+*.mod
+*.mod.c
+modules.order
+Module.symvers

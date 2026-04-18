@@ -1,0 +1,82 @@
+From: Jabbslad <jabbslad@gmail.com>
+Subject: [PATCH] libipa: camera_sensor_helper: add SmartSens SC200PC
+
+The SC200PC is a 2MP 1/3.06" Bayer sensor used by Samsung as
+the ACPI SSLC2000 front camera on Panther Lake laptops
+(e.g. Galaxy Book6 Pro NP940XJG-KGDUK). Without a helper entry,
+the simple soft IPA logs:
+
+    IPASoft: Failed to create camera sensor helper for sc200pc
+
+and falls through to a code path that treats the raw V4L2 gain
+code as a linear gain multiplier. For the SC200PC this leaves
+AGC stuck near unity gain, producing severely underexposed
+frames that AWB cannot converge on.
+
+The SC200PC analogue gain register (0x3e09, exposed via
+V4L2_CID_ANALOGUE_GAIN) is linear in 1/16 steps:
+
+    code 0x10 -> 1.0x
+    code 0x20 -> 2.0x
+    code 0xff -> 15.9375x
+
+giving the AnalogueGainLinear{ m0=1, c0=0, m1=0, c1=16 } model,
+i.e. gain(code) = code / 16. Black level pedestal per the
+SmartSens SC20x family is 64 at 10 bits, normalised to 4096 for
+the 16-bit libipa scale (matches imx219 / imx214).
+
+Also register static sensor properties so CameraSensorProperties
+stops warning and the pipeline gets correct sensor delays and
+unit cell size (1.75 um pixel pitch per SmartSens SC200 family
+datasheet).
+
+Signed-off-by: Jabbslad <jabbslad@gmail.com>
+---
+ src/ipa/libipa/camera_sensor_helper.cpp          | 12 ++++++++++++
+ src/libcamera/sensor/camera_sensor_properties.cpp | 10 ++++++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index XXXXXXX..XXXXXXX 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -788,6 +788,18 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("ov13858", CameraSensorHelperOv13858)
+
++class CameraSensorHelperSc200pc : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperSc200pc()
++	{
++		/* From SmartSens SC20x datasheet: black level 64 at 10 bits. */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 16 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("sc200pc", CameraSensorHelperSc200pc)
++
+ class CameraSensorHelperVd55g1 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index XXXXXXX..XXXXXXX 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -493,6 +493,16 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 			},
+ 			.sensorDelays = { },
+ 		} },
++		{ "sc200pc", {
++			.unitCellSize = { 1750, 1750 },
++			.testPatternModes = { },
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "vd55g1", {
+ 			.unitCellSize = { 2160, 2160 },
+ 			.testPatternModes = {

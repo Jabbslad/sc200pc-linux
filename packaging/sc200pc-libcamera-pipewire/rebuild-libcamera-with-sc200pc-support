@@ -1,0 +1,111 @@
+#!/bin/bash
+# Rebuild the Arch libcamera package with SC200PC sensor helper + properties
+# support patched in. Needed until the patch lands upstream.
+#
+# Without this rebuild, libcamera's simple soft IPA falls through to a code
+# path that treats the raw V4L2 gain code as a linear gain multiplier; on the
+# SC200PC this leaves AGC stuck near 1.0x gain, producing severely
+# underexposed, green-tinted frames that AWB cannot converge on.
+#
+# What this script does:
+#   1. Clones the current Arch libcamera PKGBUILD into a scratch dir
+#   2. Copies patches/libcamera-sc200pc.patch into that dir
+#   3. Splices the patch into the PKGBUILD's source= and prepare()
+#   4. Builds and installs the resulting packages
+#
+# Usage:
+#   rebuild-libcamera-with-sc200pc-support [workdir]
+#
+# Requires: pkgctl (from devtools) or paru/yay, base-devel, sudo.
+
+set -euo pipefail
+
+PATCH_NAME="libcamera-sc200pc.patch"
+PATCH_SRC_PATHS=(
+    "/usr/share/omarchy-extras/patches/${PATCH_NAME}"
+    "/usr/share/doc/sc200pc-libcamera-pipewire/${PATCH_NAME}"
+    "$(dirname "$(readlink -f "$0")")/../../patches/${PATCH_NAME}"
+    "$(pwd)/patches/${PATCH_NAME}"
+)
+
+find_patch() {
+    for p in "${PATCH_SRC_PATHS[@]}"; do
+        if [[ -f "$p" ]]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+PATCH_PATH="$(find_patch)" || {
+    echo "error: cannot locate ${PATCH_NAME} — checked:"
+    printf '  %s\n' "${PATCH_SRC_PATHS[@]}"
+    exit 1
+}
+echo "==> using patch: ${PATCH_PATH}"
+
+WORKDIR="${1:-$HOME/build/libcamera-sc200pc}"
+mkdir -p "$WORKDIR"
+cd "$WORKDIR"
+
+if [[ -d libcamera ]]; then
+    echo "==> libcamera/ already exists in ${WORKDIR}; refusing to overwrite."
+    echo "    rm -rf ${WORKDIR}/libcamera to restart."
+    exit 1
+fi
+
+echo "==> fetching Arch libcamera package sources..."
+if command -v pkgctl >/dev/null 2>&1; then
+    pkgctl repo clone --protocol=https libcamera
+elif command -v paru >/dev/null 2>&1; then
+    paru -G libcamera
+elif command -v yay >/dev/null 2>&1; then
+    yay -G libcamera
+else
+    echo "error: need one of pkgctl / paru / yay to fetch the libcamera PKGBUILD."
+    exit 1
+fi
+
+cd libcamera
+cp "$PATCH_PATH" ./
+
+# Idempotence guard: if we've already spliced the patch in, don't do it again.
+if grep -q "${PATCH_NAME}" PKGBUILD; then
+    echo "==> PKGBUILD already references ${PATCH_NAME}; skipping splice."
+else
+    echo "==> splicing patch reference into PKGBUILD..."
+    # Add to source=() — anchor on the existing fix-python3.14 line which is
+    # stable across recent libcamera package revisions.
+    if ! grep -q "fix-python3.14-macro-redefinition.patch" PKGBUILD; then
+        echo "error: PKGBUILD layout unexpected; check upstream changes."
+        exit 1
+    fi
+    sed -i "/fix-python3.14-macro-redefinition.patch\"/a\\  \"${PATCH_NAME}\"" PKGBUILD
+    # Disable checksum enforcement for the appended source: switch the sha512
+    # and b2 arrays to SKIP mode. Safer than computing and inlining hashes.
+    sed -i "s/^sha512sums=.*/sha512sums=('SKIP' 'SKIP' 'SKIP')/" PKGBUILD
+    sed -i "s/^b2sums=.*/b2sums=('SKIP' 'SKIP' 'SKIP')/" PKGBUILD
+    # Clear any trailing continuation lines for the old multi-line hashes.
+    sed -i "/^ *'[a-f0-9]\{64,\}'[)]*$/d" PKGBUILD
+    # Add the apply step in prepare() right after the existing patch.
+    sed -i "/patch -Np1 < ..\/\$pkgbase-fix-python3.14-macro-redefinition.patch/a\\  patch -Np1 < ../${PATCH_NAME}" PKGBUILD
+fi
+
+echo "==> building (this takes a while)..."
+makepkg -s --noconfirm
+
+echo
+echo "==> built packages:"
+ls -1 ./*.pkg.tar.zst
+
+echo
+echo "==> installing libcamera + libcamera-ipa (other split packages unchanged)..."
+sudo pacman -U --noconfirm \
+    ./libcamera-[0-9]*-x86_64.pkg.tar.zst \
+    ./libcamera-ipa-[0-9]*-x86_64.pkg.tar.zst
+
+echo
+echo "==> done. Verify with:"
+echo "    cam -l"
+echo "the 'Failed to create camera sensor helper for sc200pc' warning should be gone."

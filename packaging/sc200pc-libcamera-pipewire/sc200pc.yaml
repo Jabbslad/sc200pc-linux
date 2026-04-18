@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: CC0-1.0
+# Initial tuning file for the Samsung/SmartSens SC200PC.
+#
+# This is intentionally conservative. The Windows driver gives us useful
+# sensor-side register defaults, and those are already reflected in the
+# kernel init table. It does not give us a libcamera-native software ISP
+# tuning file, so this YAML is only a starting point for iteration.
+#
+# Current goals:
+# - avoid falling back to simple/uncalibrated.yaml
+# - provide a named anchor for SC200PC-specific tuning work
+# - keep the algorithm set aligned with libcamera simple IPA defaults
+# - recover some contrast and color while the sensor-side gain model
+#   is still being decoded
+%YAML 1.1
+---
+version: 1
+algorithms:
+  - BlackLevel:
+      r: 32
+      gr: 32
+      gb: 32
+      b: 32
+  - Awb:
+  - Ccm:
+      ccms:
+        - ct: 3200
+          ccm: [ 2.18, -0.98, -0.20,
+                 -0.14, 1.16, -0.02,
+                  0.02, -0.20, 1.18 ]
+        - ct: 6500
+          ccm: [ 1.84, -0.70, -0.14,
+                 -0.08, 1.12, -0.04,
+                  0.00, -0.18, 1.18 ]
+  - Adjust:
+  - Agc:
+...

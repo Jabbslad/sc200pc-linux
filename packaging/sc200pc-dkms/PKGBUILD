@@ -1,0 +1,34 @@
+pkgname=sc200pc-dkms
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="DKMS package for the Samsung/Intel SC200PC camera sensor driver"
+arch=('x86_64')
+url="https://github.com/jabbslad/omarchy-extras"
+license=('GPL')
+depends=('dkms')
+makedepends=()
+source=(
+  'README.md'
+  'dkms.conf'
+  'Kbuild'
+  'Makefile'
+  'sc200pc.c'
+)
+sha256sums=(
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
+
+package() {
+  local srcdir_pkg="/usr/src/${pkgname%-dkms}-${pkgver}"
+
+  install -d "${pkgdir}${srcdir_pkg}"
+  install -m644 README.md "${pkgdir}${srcdir_pkg}/README.md"
+  install -m644 dkms.conf "${pkgdir}${srcdir_pkg}/dkms.conf"
+  install -m644 Kbuild "${pkgdir}${srcdir_pkg}/Kbuild"
+  install -m644 Makefile "${pkgdir}${srcdir_pkg}/Makefile"
+  install -m644 sc200pc.c "${pkgdir}${srcdir_pkg}/sc200pc.c"
+}

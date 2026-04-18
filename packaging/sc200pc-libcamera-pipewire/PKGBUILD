@@ -1,0 +1,48 @@
+pkgname=sc200pc-libcamera-pipewire
+pkgver=2026.04.17
+pkgrel=2
+pkgdesc="Experimental native libcamera/PipeWire stack for the Galaxy Book6 Pro SC200PC camera"
+arch=('x86_64')
+url="https://github.com/jabbslad/omarchy-extras"
+license=('MIT')
+install="${pkgname}.install"
+depends=(
+  'libcamera'
+  'libcamera-tools'
+  'gst-plugin-libcamera'
+  'pipewire-libcamera'
+)
+makedepends=()
+source=(
+  'README.md'
+  'sc200pc.yaml'
+  '72-ipu7-native-isys.rules'
+  'sc200pc-libcamera-check'
+  'rebuild-libcamera-with-sc200pc-support'
+  'libcamera-sc200pc.patch'
+  "${pkgname}.install"
+)
+sha256sums=(
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
+
+package() {
+  install -Dm644 "${srcdir}/README.md" \
+    "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 "${srcdir}/sc200pc.yaml" \
+    "${pkgdir}/usr/share/libcamera/ipa/simple/sc200pc.yaml"
+  install -Dm644 "${srcdir}/72-ipu7-native-isys.rules" \
+    "${pkgdir}/etc/udev/rules.d/72-ipu7-native-isys.rules"
+  install -Dm755 "${srcdir}/sc200pc-libcamera-check" \
+    "${pkgdir}/usr/bin/sc200pc-libcamera-check"
+  install -Dm755 "${srcdir}/rebuild-libcamera-with-sc200pc-support" \
+    "${pkgdir}/usr/bin/rebuild-libcamera-with-sc200pc-support"
+  install -Dm644 "${srcdir}/libcamera-sc200pc.patch" \
+    "${pkgdir}/usr/share/doc/${pkgname}/libcamera-sc200pc.patch"
+}

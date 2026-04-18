@@ -1,0 +1,33 @@
+post_install() {
+    echo ">>> Installed SC200PC userspace dependencies:"
+    echo ">>>   libcamera, libcamera-tools, gst-plugin-libcamera, pipewire-libcamera"
+    echo ">>>"
+    echo ">>> Installed /etc/udev/rules.d/72-ipu7-native-isys.rules to restore"
+    echo ">>> user access to Intel IPU7 ISYS capture nodes for the native path."
+    echo ">>> Reload udev or reboot after install:"
+    echo ">>>"
+    echo ">>>   sudo udevadm control --reload"
+    echo ">>>   sudo udevadm trigger --subsystem-match=video4linux"
+    echo ">>>"
+    echo ">>> If you were previously testing the experimental HAL path, remove:"
+    echo ">>>   /etc/wireplumber/wireplumber.conf.d/10-disable-libcamera.conf"
+    echo ">>>   /etc/wireplumber/wireplumber.conf.d/60-hide-ipu7-v4l2.conf"
+    echo ">>> and stop v4l2-relayd@ipu7 before validating libcamera."
+    echo ">>>"
+    echo ">>> Stock libcamera has no SC200PC CameraSensorHelper, so AGC runs"
+    echo ">>> without a gain model and frames come out dark and green-tinted."
+    echo ">>> To apply the helper patch and rebuild libcamera:"
+    echo ">>>"
+    echo ">>>   rebuild-libcamera-with-sc200pc-support"
+    echo ">>>"
+    echo ">>> Then verify with:"
+    echo ">>>   sc200pc-libcamera-check"
+    echo ">>>   cam -l       # should no longer log 'Failed to create camera sensor helper'"
+    echo ">>>   qcam"
+    echo ">>>"
+    echo ">>> The libcamhal / vendor-HAL path is unrelated and still blocked."
+}
+
+post_upgrade() {
+    post_install
+}

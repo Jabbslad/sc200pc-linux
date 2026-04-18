@@ -1,0 +1,40 @@
+pkgname=ipu-bridge-sslc2000
+pkgver=6.19.10.r1
+pkgrel=1
+pkgdesc="Intel IPU bridge module with Samsung SSLC2000 (SC200PC) added to supported sensors"
+arch=('x86_64')
+url="https://github.com/jabbslad/omarchy-extras"
+license=('GPL-2.0-only')
+depends=('dkms')
+makedepends=()
+conflicts=()
+replaces=()
+source=(
+  'README.md'
+  'dkms.conf'
+  'Kbuild'
+  'Makefile'
+  'ipu-bridge.c'
+)
+sha256sums=(
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
+
+prepare() {
+  sed -i "s/@PKGVER@/${pkgver}/" "${srcdir}/dkms.conf"
+}
+
+package() {
+  local srcdir_pkg="/usr/src/${pkgname}-${pkgver}"
+
+  install -d "${pkgdir}${srcdir_pkg}"
+  install -m644 "${srcdir}/README.md"     "${pkgdir}${srcdir_pkg}/README.md"
+  install -m644 "${srcdir}/dkms.conf"     "${pkgdir}${srcdir_pkg}/dkms.conf"
+  install -m644 "${srcdir}/Kbuild"        "${pkgdir}${srcdir_pkg}/Kbuild"
+  install -m644 "${srcdir}/Makefile"      "${pkgdir}${srcdir_pkg}/Makefile"
+  install -m644 "${srcdir}/ipu-bridge.c"  "${pkgdir}${srcdir_pkg}/ipu-bridge.c"
+}
