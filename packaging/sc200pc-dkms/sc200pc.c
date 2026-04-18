@@ -93,6 +93,15 @@
 #define SC200PC_ANALOGUE_GAIN_MAX	0x20
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
 
+/*
+ * Digital gain: the HAL's 3A engine (AIQB) sends V4L2_CID_DIGITAL_GAIN
+ * with 128 = 1.0×.  Accept the control so the exposure update path
+ * doesn't abort.  Not wired to hardware registers yet.
+ */
+#define SC200PC_DIGITAL_GAIN_MIN	1
+#define SC200PC_DIGITAL_GAIN_MAX	4096
+#define SC200PC_DIGITAL_GAIN_DEFAULT	128
+
 /* VTS register pair (big-endian 16-bit). */
 #define SC200PC_REG_VTS_H		0x320e
 #define SC200PC_REG_VTS_L		0x320f
@@ -293,6 +302,7 @@ struct sc200pc {
 	struct v4l2_ctrl *hblank;
 	struct v4l2_ctrl *exposure;
 	struct v4l2_ctrl *analogue_gain;
+	struct v4l2_ctrl *digital_gain;
 	struct v4l2_ctrl *test_pattern;
 
 	u16  cur_vts;
@@ -490,6 +500,10 @@ static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
 		ret = sc200pc_set_analogue_gain(sensor, ctrl->val);
+		break;
+	case V4L2_CID_DIGITAL_GAIN:
+		/* Accepted but not wired to hardware yet. */
+		ret = 0;
 		break;
 	case V4L2_CID_TEST_PATTERN:
 		/*
@@ -932,7 +946,7 @@ static int sc200pc_probe(struct i2c_client *client)
 
 	sensor->cur_vts = SC200PC_VTS_DEF;
 
-	ret = v4l2_ctrl_handler_init(&sensor->ctrls, 8);
+	ret = v4l2_ctrl_handler_init(&sensor->ctrls, 9);
 	if (ret)
 		goto err_entity_cleanup;
 
@@ -985,6 +999,12 @@ static int sc200pc_probe(struct i2c_client *client)
 						  SC200PC_ANALOGUE_GAIN_MIN,
 						  SC200PC_ANALOGUE_GAIN_MAX,
 						  1, SC200PC_ANALOGUE_GAIN_DEFAULT);
+
+	sensor->digital_gain = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
+						 V4L2_CID_DIGITAL_GAIN,
+						 SC200PC_DIGITAL_GAIN_MIN,
+						 SC200PC_DIGITAL_GAIN_MAX,
+						 1, SC200PC_DIGITAL_GAIN_DEFAULT);
 
 	sensor->test_pattern =
 		v4l2_ctrl_new_std_menu_items(&sensor->ctrls, &sc200pc_ctrl_ops,
