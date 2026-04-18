@@ -53,20 +53,49 @@
  * Rounded to 195 MHz; IPU7 PHY is forgiving of a few percent drift.
  */
 #define SC200PC_LINK_FREQ_DEFAULT	195000000ULL
-#define SC200PC_PIXEL_RATE_DEFAULT	78000000ULL
 
 /* Native output resolution programmed by the init table. */
 #define SC200PC_WIDTH			1928
 #define SC200PC_HEIGHT			1088
 #define SC200PC_FPS			30
-#define SC200PC_HTS			0x047e
-#define SC200PC_VTS			0x08d4
+#define SC200PC_HTS			0x047e	/* 1150 internal clocks/line */
+#define SC200PC_VTS_DEF			0x08d4	/* 2260 lines/frame */
+#define SC200PC_VTS_MIN			(SC200PC_HEIGHT + 8)
+#define SC200PC_VTS_MAX			0x7fff
+
+/*
+ * The SC200PC uses internal column-parallel readout: multiple pixels are
+ * sampled per internal clock cycle, so HTS (1150) < active width (1928).
+ * V4L2's timing model requires line_length_pixels >= active_width, and
+ * computes: llp = HBLANK + width, fll = VBLANK + height.
+ *
+ * We report pixel_rate at 2× the internal rate and treat line_length as
+ * 2×HTS.  This keeps frame-duration arithmetic exact:
+ *   llp = 2*1150 = 2300,  HBLANK = 2300 − 1928 = 372
+ *   fll = 2260,           VBLANK = 2260 − 1088 = 1172
+ *   pixel_rate = 2300 × 2260 × 30 = 155 940 000
+ *   frame_dur  = 2300 × 2260 / 155940000 = 33.33 ms  (30 fps)  ✓
+ *
+ * Exposure and gain units are unaffected — they are in lines and codes,
+ * not pixels.
+ */
+#define SC200PC_INTERNAL_PARALLELISM	2
+#define SC200PC_LLP			(SC200PC_HTS * SC200PC_INTERNAL_PARALLELISM)
+#define SC200PC_HBLANK_DEF		(SC200PC_LLP - SC200PC_WIDTH)
+#define SC200PC_VBLANK_DEF		(SC200PC_VTS_DEF - SC200PC_HEIGHT)
+#define SC200PC_PIXEL_RATE_DEFAULT	((u64)SC200PC_LLP * SC200PC_VTS_DEF * SC200PC_FPS)
+
 #define SC200PC_EXPOSURE_MIN		1
-#define SC200PC_EXPOSURE_MAX		5000
+#define SC200PC_EXPOSURE_MAX_MARGIN	8
+#define SC200PC_EXPOSURE_MAX		(SC200PC_VTS_DEF - SC200PC_EXPOSURE_MAX_MARGIN)
 #define SC200PC_EXPOSURE_DEFAULT	0x08b0
 #define SC200PC_ANALOGUE_GAIN_MIN	0x10
 #define SC200PC_ANALOGUE_GAIN_MAX	0x20
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
+
+/* VTS register pair (big-endian 16-bit). */
+#define SC200PC_REG_VTS_H		0x320e
+#define SC200PC_REG_VTS_L		0x320f
 
 /* Init table terminators. */
 #define SC200PC_REG_END			0xffff
@@ -264,7 +293,9 @@ struct sc200pc {
 	struct v4l2_ctrl *hblank;
 	struct v4l2_ctrl *exposure;
 	struct v4l2_ctrl *analogue_gain;
+	struct v4l2_ctrl *test_pattern;
 
+	u16  cur_vts;
 	bool streaming;
 	u32 xclk_freq;
 	u32 mipi_lanes;
@@ -276,6 +307,11 @@ struct sc200pc {
 
 static const s64 sc200pc_link_freqs[] = {
 	SC200PC_LINK_FREQ_DEFAULT,
+};
+
+static const char * const sc200pc_test_pattern_menu[] = {
+	"Off",
+	"Color Bars",
 };
 
 static const struct v4l2_rect sc200pc_pixel_array = {
@@ -399,12 +435,51 @@ static int sc200pc_apply_controls(struct sc200pc *sensor)
 	return sc200pc_set_analogue_gain(sensor, sensor->analogue_gain->val);
 }
 
+static int sc200pc_set_vts(struct sc200pc *sensor, u16 vts)
+{
+	int ret;
+
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_VTS_H, vts >> 8);
+	if (ret)
+		return ret;
+
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_VTS_L, vts & 0xff);
+	if (ret)
+		return ret;
+
+	sensor->cur_vts = vts;
+	return 0;
+}
+
 static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct sc200pc *sensor = ctrl_to_sc200pc(ctrl);
 	int ret = 0;
 
 	mutex_lock(&sensor->lock);
+
+	/*
+	 * VBLANK / HBLANK are cached even while not streaming so that
+	 * the HAL can read back the value it wrote before stream-on.
+	 */
+	switch (ctrl->id) {
+	case V4L2_CID_VBLANK: {
+		u16 vts = ctrl->val + SC200PC_HEIGHT;
+
+		if (sensor->streaming) {
+			ret = sc200pc_set_vts(sensor, vts);
+		} else {
+			sensor->cur_vts = vts;
+		}
+		break;
+	}
+	case V4L2_CID_HBLANK:
+		/* Accept the write; HTS is fixed by the init table. */
+		ret = 0;
+		break;
+	default:
+		break;
+	}
 
 	if (!sensor->streaming)
 		goto out_unlock;
@@ -415,6 +490,14 @@ static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
 		ret = sc200pc_set_analogue_gain(sensor, ctrl->val);
+		break;
+	case V4L2_CID_TEST_PATTERN:
+		/*
+		 * The HAL always sends TEST_PATTERN=Off during startup.
+		 * Accept that request even though test-pattern programming
+		 * is not wired yet, so the sensor can be configured.
+		 */
+		ret = 0;
 		break;
 	default:
 		break;
@@ -548,6 +631,17 @@ static int sc200pc_start_streaming(struct sc200pc *sensor)
 	ret = sc200pc_write_array(sensor, sc200pc_1928x1088_raw10_30fps);
 	if (ret)
 		return ret;
+
+	/*
+	 * Apply VTS if the HAL changed VBLANK before stream-on.
+	 * The init table sets VTS to SC200PC_VTS_DEF; only re-write
+	 * if the cached value differs.
+	 */
+	if (sensor->cur_vts != SC200PC_VTS_DEF) {
+		ret = sc200pc_set_vts(sensor, sensor->cur_vts);
+		if (ret)
+			return ret;
+	}
 
 	/* Releasing sleep starts the MIPI output. */
 	ret = sc200pc_write_reg(sensor, SC200PC_REG_SLEEP_MODE, 0x01);
@@ -836,7 +930,9 @@ static int sc200pc_probe(struct i2c_client *client)
 	sensor->fmt.field = V4L2_FIELD_NONE;
 	sensor->fmt.colorspace = V4L2_COLORSPACE_RAW;
 
-	ret = v4l2_ctrl_handler_init(&sensor->ctrls, 6);
+	sensor->cur_vts = SC200PC_VTS_DEF;
+
+	ret = v4l2_ctrl_handler_init(&sensor->ctrls, 8);
 	if (ret)
 		goto err_entity_cleanup;
 
@@ -855,19 +951,28 @@ static int sc200pc_probe(struct i2c_client *client)
 	if (sensor->pixel_rate)
 		sensor->pixel_rate->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
+	/*
+	 * VBLANK — writable so the HAL can adjust frame duration.
+	 * The HAL computes fll = VBLANK + height, then writes VTS.
+	 */
 	sensor->vblank = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
 					   V4L2_CID_VBLANK,
-					   0, 0, 1, 0);
-	if (sensor->vblank)
-		sensor->vblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+					   SC200PC_VTS_MIN - SC200PC_HEIGHT,
+					   SC200PC_VTS_MAX - SC200PC_HEIGHT,
+					   1, SC200PC_VBLANK_DEF);
 
+	/*
+	 * HBLANK — writable so SetControl() from the HAL succeeds, but
+	 * the hardware HTS is fixed by the init table (the sensor uses
+	 * internal column-parallel readout, so the real line length in
+	 * internal clocks cannot be changed without re-programming the
+	 * PLL). See the SC200PC_INTERNAL_PARALLELISM comment above.
+	 */
 	sensor->hblank = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
 					   V4L2_CID_HBLANK,
-					   SC200PC_HTS - SC200PC_WIDTH,
-					   SC200PC_HTS - SC200PC_WIDTH,
-					   1, SC200PC_HTS - SC200PC_WIDTH);
-	if (sensor->hblank)
-		sensor->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+					   SC200PC_HBLANK_DEF,
+					   SC200PC_HBLANK_DEF,
+					   1, SC200PC_HBLANK_DEF);
 
 	sensor->exposure = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
 					     V4L2_CID_EXPOSURE,
@@ -880,6 +985,12 @@ static int sc200pc_probe(struct i2c_client *client)
 						  SC200PC_ANALOGUE_GAIN_MIN,
 						  SC200PC_ANALOGUE_GAIN_MAX,
 						  1, SC200PC_ANALOGUE_GAIN_DEFAULT);
+
+	sensor->test_pattern =
+		v4l2_ctrl_new_std_menu_items(&sensor->ctrls, &sc200pc_ctrl_ops,
+					     V4L2_CID_TEST_PATTERN,
+					     ARRAY_SIZE(sc200pc_test_pattern_menu) - 1,
+					     0, 0, sc200pc_test_pattern_menu);
 
 	if (sensor->ctrls.error) {
 		ret = sensor->ctrls.error;

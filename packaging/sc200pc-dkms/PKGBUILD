@@ -1,5 +1,5 @@
 pkgname=sc200pc-dkms
-pkgver=0.4.0
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="DKMS package for the Samsung/Intel SC200PC camera sensor driver"
 arch=('x86_64')
