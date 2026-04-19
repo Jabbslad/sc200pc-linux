@@ -107,8 +107,17 @@ broken colour, no AGC failure.
   have a slight flatness, and the IPA YAML is a first-pass
   approximation rather than measured calibration. Improving it
   requires real tuning work against a colour chart.
-- **CPU cost:** software ISP runs on the CPU, costing ~5–15% of one
-  core continuously while the camera is in use.
+- **CPU cost:** depends on libcamera's SoftISP mode.
+  - **GPU mode** (default on Arch libcamera ≥ 0.7.0): ~9% of one
+    core; debayer + colour-correction matrix run on the iGPU via
+    OpenGL ES 2.0. Measured on Panther Lake Xe3 at 1080p30: 0.64s
+    user + 0.34s sys over 10.48s wall.
+  - **CPU mode** (force with `LIBCAMERA_SOFTISP_MODE=cpu`): ~63% of
+    one core under the same workload. Pre-0.7.0 libcamera only
+    offered this path.
+
+  The full IPA (AE, AWB, lens shading) still runs on the CPU in both
+  modes, which is why GPU mode isn't closer to zero.
 
 ## IPA tuning
 
