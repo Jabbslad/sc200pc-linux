@@ -109,13 +109,16 @@
  * needing userspace changes to explicitly drive digital gain.
  *
  * Control scale matches the existing SC200PC helper model: gain code / 16.
- * Examples:
- *   0x10 = 1.0x total gain   -> analogue 1.0x, digital 1.0x
- *   0x80 = 8.0x total gain   -> analogue 8.0x, digital 1.0x
- *   0x100 = 16.0x total gain -> analogue 8.0x, digital 2.0x
- *   0x400 = 64.0x total gain -> analogue 8.0x, digital 8.0x
+ * Examples (values in between are produced smoothly via the digital-gain
+ * fine register, not just the coarse steps below):
+ *   0x10 = 1.0x total gain    -> analogue 1.0x, digital 1.0x
+ *   0x80 = 8.0x total gain    -> analogue 8.0x, digital 1.0x
+ *   0x100 = 16.0x total gain  -> analogue 8.0x, digital 2.0x
+ *   0x400 = 64.0x total gain  -> analogue 8.0x, digital 8.0x
+ *   0x600 = 96.0x total gain  -> analogue 8.0x, digital 8.0x coarse x 1.5x fine
+ *   0x800 = 128.0x total gain -> analogue 8.0x, digital 16.0x
  */
-#define SC200PC_TOTAL_GAIN_MAX		0x400	/* 64.0x total via analogue+digital */
+#define SC200PC_TOTAL_GAIN_MAX		0x800	/* 128.0x total via analogue+digital */
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
 
 /*
@@ -514,6 +517,25 @@ static int sc200pc_set_analogue_gain(struct sc200pc *sensor, u32 gain)
 				 gain & 0xff);
 }
 
+/*
+ * Digital-gain split:
+ *
+ *   0x3e06 (coarse) picks a power-of-2 multiplier from coarse_map:
+ *     0x00 = 1x, 0x01 = 2x, 0x03 = 4x, 0x07 = 8x, 0x0f = 16x, 0x1f = 32x
+ *
+ *   0x3e07 (fine) interpolates smoothly between adjacent coarse steps:
+ *     0x80 = 1.0x  ->  0xfc = ~1.97x
+ *
+ *   total digital gain = coarse * (fine / 0x80)
+ *
+ * Together they can reach ~63x in digital gain; combined with the 8x
+ * hardware analogue ceiling that caps real-world total gain well above
+ * what we ever want AGC to request, so the user-facing cap is enforced
+ * in sc200pc_set_total_gain() / SC200PC_TOTAL_GAIN_MAX rather than here.
+ *
+ * The fine register is written in 4-step increments because the SmartSens
+ * family ignores the low two bits.
+ */
 static int sc200pc_set_digital_gain(struct sc200pc *sensor, u32 gain)
 {
 	static const u8 coarse_map[] = { 0x00, 0x01, 0x03, 0x07, 0x0f, 0x1f };
