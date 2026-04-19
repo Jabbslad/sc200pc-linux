@@ -1,59 +1,82 @@
 #!/usr/bin/env bash
-# Idempotent installer for SC200PC camera support on Galaxy Book6 Pro.
-# Safe to re-run.
+# One-shot installer for SC200PC camera support on the Samsung Galaxy
+# Book6 Pro (NP940XJG-KGDUK). Delegates to paru; once the four packages
+# are published to the AUR, a user can skip this script entirely and
+# just run:
+#
+#     paru -S galaxybook6pro-camera
+#
+# This script exists to (a) bootstrap paru on bare Arch installs that
+# don't already have an AUR helper, and (b) build-from-local-checkout
+# for contributors iterating before pushing to AUR.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "==> Building and installing packages from $REPO_ROOT/packaging/"
-
-# Build + install each package via makepkg. Order matters: the bridge
-# and the sensor driver both have to be installed before libcamera is
-# rebuilt with the helper.
-for pkg in ipu-bridge-sslc2000 sc200pc-dkms sc200pc-libcamera-pipewire; do
-  echo
-  echo "    -> $pkg"
-  pushd "$REPO_ROOT/packaging/$pkg" >/dev/null
-  makepkg -si --needed --noconfirm
-  popd >/dev/null
-done
-
-# Rebuild Arch libcamera with the SC200PC sensor helper + properties
-# patch so AGC actually converges. The script ships in
-# sc200pc-libcamera-pipewire and was just installed to /usr/bin.
-echo
-echo "==> Rebuilding libcamera with SC200PC sensor helper"
-if command -v rebuild-libcamera-with-sc200pc-support >/dev/null; then
-  rebuild-libcamera-with-sc200pc-support
-else
-  echo "    rebuild-libcamera-with-sc200pc-support not on PATH; skipping"
-  echo "    Run it manually after this install completes."
+# Ensure an AUR helper is available. Omarchy ships paru already;
+# vanilla Arch usually doesn't.
+if ! command -v paru >/dev/null 2>&1 && ! command -v yay >/dev/null 2>&1; then
+  echo "==> No AUR helper found — bootstrapping paru from AUR"
+  sudo pacman -S --needed --noconfirm base-devel git
+  tmp="$(mktemp -d)"
+  git clone https://aur.archlinux.org/paru-bin.git "$tmp/paru-bin"
+  (cd "$tmp/paru-bin" && makepkg -si --noconfirm)
+  rm -rf "$tmp"
 fi
 
-# Tear down any HAL-only WirePlumber overrides — these come from old
-# attempts to use the proprietary Intel IPU7 vendor HAL, which is not
-# the path this repo takes.
-echo
-echo "==> Removing HAL-only WirePlumber overrides (if present)"
-sudo rm -f \
-  /etc/wireplumber/wireplumber.conf.d/10-disable-libcamera.conf \
-  /etc/wireplumber/wireplumber.conf.d/60-hide-ipu7-v4l2.conf
+AUR_HELPER="$(command -v paru || command -v yay)"
 
-# udev rule for IPU7 ISYS node user access (the rule itself is also
-# packaged inside sc200pc-libcamera-pipewire; this just makes sure it's
-# active without waiting for a reboot).
-echo "==> Reloading udev"
-sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=video4linux
+# Remove packages that conflict with the native libcamera approach:
+# - old-named packages from pre-AUR-rename layout
+# - Intel HAL packages (mutually exclusive with libcamera)
+_old=()
+for p in ipu-bridge-sslc2000 sc200pc-libcamera-pipewire \
+         intel-ipu7-camera intel-ipu7-camera-sc200pc \
+         intel-ipu7-camera-sc200pc-debug sc200pc-ipu75xa-config \
+         v4l2-relayd; do
+  if pacman -Qq "$p" >/dev/null 2>&1; then
+    _old+=("$p")
+  fi
+done
+if (( ${#_old[@]} )); then
+  echo "==> Removing conflicting packages: ${_old[*]}"
+  sudo pacman -Rdd --noconfirm "${_old[@]}"
+fi
 
-# Stop any v4l2-relayd that the HAL path may have left running
-sudo systemctl stop v4l2-relayd@ipu7 2>/dev/null || true
+# Clean up orphaned files left behind by removed old packages. pacman
+# preserves backup=() files or modified config as .pacsave; the libcamera
+# fork ships the same udev rule path and pacman will refuse to overwrite
+# a file it doesn't own.
+for f in \
+    /etc/udev/rules.d/72-ipu7-native-isys.rules
+do
+  if [[ -f "$f" ]] && ! pacman -Qo "$f" >/dev/null 2>&1; then
+    echo "==> Removing orphaned $f"
+    sudo rm -f "$f"
+  fi
+done
 
-# Restart the user-side services so the camera shows up in browser
-# pickers immediately, without logout.
-echo "==> Restarting user services (PipeWire, WirePlumber, portal)"
-systemctl --user restart wireplumber pipewire xdg-desktop-portal \
-  xdg-desktop-portal-hyprland 2>/dev/null || true
+# Try the AUR-native path first. Once published, this is all users need.
+if "$AUR_HELPER" -Si galaxybook6pro-camera >/dev/null 2>&1; then
+  echo "==> Installing galaxybook6pro-camera from AUR"
+  exec "$AUR_HELPER" -S --needed galaxybook6pro-camera
+fi
+
+# Fallback: build the packages from this checkout. Used by contributors
+# iterating on the PKGBUILDs before pushing to AUR.
+echo "==> galaxybook6pro-camera not yet on AUR; building from $REPO_ROOT/packaging/"
+for pkg in \
+    ipu-bridge-sslc2000-dkms \
+    sc200pc-dkms \
+    libcamera-sc200pc \
+    galaxybook6pro-camera
+do
+  echo
+  echo "    -> $pkg"
+  # Don't use --noconfirm: libcamera-sc200pc triggers pacman replace-prompts
+  # for stock libcamera/libcamera-ipa/etc. that must be accepted interactively.
+  ( cd "$REPO_ROOT/packaging/$pkg" && makepkg -si --needed )
+done
 
 echo
 echo "==> Done. Verify with:"

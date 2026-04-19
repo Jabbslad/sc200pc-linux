@@ -1,26 +1,19 @@
 _sc200pc_activate() {
-  # Remove HAL-only WirePlumber overrides that would hide the camera
-  # from libcamera consumers. These come from earlier attempts at the
-  # proprietary Intel IPU7 vendor HAL path, which this meta-package
-  # does not take.
+  # Remove WirePlumber overrides that conflict with the native libcamera
+  # camera path. These may come from intel-ipu7-camera (the proprietary
+  # HAL package) or from distros that blanket-disable libcamera.
   rm -f \
     /etc/wireplumber/wireplumber.conf.d/10-disable-libcamera.conf \
-    /etc/wireplumber/wireplumber.conf.d/60-hide-ipu7-v4l2.conf
+    /etc/wireplumber/wireplumber.conf.d/60-hide-ipu7-v4l2.conf \
+    /etc/wireplumber/wireplumber.conf.d/99-disable-libcamera.conf
 
-  # Omarchy (and some other distros) ship a blanket libcamera-disable
-  # rule. Remove it so the SC200PC can be exposed via libcamera/PipeWire.
-  rm -f /etc/wireplumber/wireplumber.conf.d/99-disable-libcamera.conf
-
-  # Stop AND disable the HAL-path v4l2-relayd service. It has
-  # Restart=always and an ExecStartPost that restarts WirePlumber —
-  # if left enabled it crash-loops on every boot and takes audio down
-  # with it (the service is useless on the native libcamera path).
-  systemctl stop v4l2-relayd@ipu7 2>/dev/null || true
-  systemctl disable v4l2-relayd@ipu7 2>/dev/null || true
-
-  # Remove the HAL-era override that injects WirePlumber restarts into
-  # the v4l2-relayd service. Even if someone re-enables the unit later
-  # the override would still cause the restart storm.
+  # If the intel-ipu7-camera HAL package was previously installed it
+  # leaves behind a v4l2-relayd service that crash-loops and takes
+  # audio down with it. Clean it up.
+  if systemctl list-unit-files v4l2-relayd@ipu7.service &>/dev/null; then
+    systemctl stop v4l2-relayd@ipu7 2>/dev/null || true
+    systemctl disable v4l2-relayd@ipu7 2>/dev/null || true
+  fi
   rm -rf /etc/systemd/system/v4l2-relayd@ipu7.service.d
   systemctl daemon-reload 2>/dev/null || true
 
