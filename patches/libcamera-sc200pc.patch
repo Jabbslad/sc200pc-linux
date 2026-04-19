@@ -29,11 +29,16 @@ stops warning and the pipeline gets correct sensor delays and
 unit cell size (1.75 um pixel pitch per SmartSens SC200 family
 datasheet).
 
+Lower the simple IPA's default gamma from 2.2 to 1.8 for a steeper
+tone curve that produces better contrast on sensors without a
+hardware ISP.
+
 Signed-off-by: Jabbslad <jabbslad@gmail.com>
 ---
- src/ipa/libipa/camera_sensor_helper.cpp          | 11 +++++++++++
- src/libcamera/sensor/camera_sensor_properties.cpp | 10 ++++++++++
- 2 files changed, 21 insertions(+)
+ src/ipa/libipa/camera_sensor_helper.cpp              | 11 +++++++++++
+ src/ipa/simple/algorithms/adjust.h                   |  2 +-
+ src/libcamera/sensor/camera_sensor_properties.cpp    | 10 ++++++++++
+ 3 files changed, 22 insertions(+), 1 deletion(-)
 
 diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
 index XXXXXXX..XXXXXXX 100644
@@ -57,6 +62,19 @@ index XXXXXXX..XXXXXXX 100644
  class CameraSensorHelperVd55g1 : public CameraSensorHelper
  {
  public:
+diff --git a/src/ipa/simple/algorithms/adjust.h b/src/ipa/simple/algorithms/adjust.h
+index XXXXXXX..XXXXXXX 100644
+--- a/src/ipa/simple/algorithms/adjust.h
++++ b/src/ipa/simple/algorithms/adjust.h
+@@ -17,7 +17,7 @@ namespace ipa::soft::algorithms {
+ 
+ namespace {
+ 
+-constexpr float kDefaultGamma = 2.2f;
++constexpr float kDefaultGamma = 1.8f;
+ 
+ } /* namespace */
+ 
 diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
 index XXXXXXX..XXXXXXX 100644
 --- a/src/libcamera/sensor/camera_sensor_properties.cpp

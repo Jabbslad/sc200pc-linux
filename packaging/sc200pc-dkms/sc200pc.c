@@ -9,7 +9,8 @@
 //     variants share the register map; chip ID and a few PHY-specific
 //     values differ. Validation on SC200PC hardware is expected to reveal
 //     tuning needed for 2-lane MIPI output.
-//   - controls (exposure, gain, test pattern): not yet wired
+//   - controls: exposure, analogue gain, digital gain, VBLANK/HBLANK wired;
+//     test pattern still stubbed
 
 #include <linux/acpi.h>
 #include <linux/clk.h>
@@ -34,6 +35,14 @@
 #define SC200PC_REG_CHIP_ID_H		0x3107
 #define SC200PC_REG_CHIP_ID_L		0x3108
 #define SC200PC_REG_CHIP_REVISION	0x3109
+#define SC200PC_REG_FLIP_MIRROR		0x3221
+#define SC200PC_REG_DIGITAL_GAIN_H	0x3e06
+#define SC200PC_REG_DIGITAL_GAIN_L	0x3e07
+#define SC200PC_REG_EXPOSURE_H		0x3e00
+#define SC200PC_REG_EXPOSURE_M		0x3e01
+#define SC200PC_REG_EXPOSURE_L		0x3e02
+#define SC200PC_REG_ANALOGUE_GAIN	0x3e09
+#define SC200PC_REG_BLACK_LEVEL		0x3901
 
 /*
  * Sensor returns (0x0b << 8) | 0x71 on reg reads of 0x3107/0x3108.
@@ -90,16 +99,36 @@
 #define SC200PC_EXPOSURE_MAX		(SC200PC_VTS_DEF - SC200PC_EXPOSURE_MAX_MARGIN)
 #define SC200PC_EXPOSURE_DEFAULT	0x08b0
 #define SC200PC_ANALOGUE_GAIN_MIN	0x10
-#define SC200PC_ANALOGUE_GAIN_MAX	0x80	/* 8.0x (AIQB r12 confirms 8x) */
+#define SC200PC_ANALOGUE_GAIN_MAX	0x80	/* true hardware analogue max = 8.0x */
+/*
+ * The driver advertises V4L2_CID_ANALOGUE_GAIN as a total gain request,
+ * not as pure hardware analogue gain. Requests up to 0x80 are programmed
+ * fully as analogue gain; above 0x80, the driver clamps analogue gain at
+ * its true hardware maximum and spills the excess into the digital-gain
+ * registers. This keeps libcamera's simple AGC working at 30 fps without
+ * needing userspace changes to explicitly drive digital gain.
+ *
+ * Control scale matches the existing SC200PC helper model: gain code / 16.
+ * Examples:
+ *   0x10 = 1.0x total gain   -> analogue 1.0x, digital 1.0x
+ *   0x80 = 8.0x total gain   -> analogue 8.0x, digital 1.0x
+ *   0x100 = 16.0x total gain -> analogue 8.0x, digital 2.0x
+ *   0x400 = 64.0x total gain -> analogue 8.0x, digital 8.0x
+ */
+#define SC200PC_TOTAL_GAIN_MAX		0x400	/* 64.0x total via analogue+digital */
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
 
 /*
- * Digital gain: the HAL's 3A engine (AIQB) sends V4L2_CID_DIGITAL_GAIN
- * with 128 = 1.0×.  Accept the control so the exposure update path
- * doesn't abort.  Not wired to hardware registers yet.
+ * Digital gain: match the SmartSens SC20x family convention used by the
+ * closest public sibling (SC202CS), where 128 = 1.0× and the gain is
+ * encoded across 0x3e06/0x3e07 as coarse/fine digital gain.
+ *
+ * This control remains exposed separately for diagnostics and manual
+ * experiments, but normal auto-exposure flow uses sc200pc_set_total_gain()
+ * via the advertised analogue-gain control above.
  */
-#define SC200PC_DIGITAL_GAIN_MIN	1
-#define SC200PC_DIGITAL_GAIN_MAX	4096
+#define SC200PC_DIGITAL_GAIN_MIN	128
+#define SC200PC_DIGITAL_GAIN_MAX	4096	/* 32.0x */
 #define SC200PC_DIGITAL_GAIN_DEFAULT	128
 
 /* VTS register pair (big-endian 16-bit). */
@@ -405,6 +434,53 @@ static int sc200pc_write_array(struct sc200pc *sensor,
 	return 0;
 }
 
+static u32 sc200pc_exposure_max(const struct sc200pc *sensor)
+{
+	return max_t(u32, SC200PC_EXPOSURE_MIN,
+		     sensor->cur_vts - SC200PC_EXPOSURE_MAX_MARGIN);
+}
+
+static void sc200pc_update_exposure_range(struct sc200pc *sensor)
+{
+	u32 max_exp = sc200pc_exposure_max(sensor);
+	u32 def_exp = min_t(u32, SC200PC_EXPOSURE_DEFAULT, max_exp);
+
+	__v4l2_ctrl_modify_range(sensor->exposure,
+				 SC200PC_EXPOSURE_MIN, max_exp, 1, def_exp);
+}
+
+static void sc200pc_log_key_regs(struct sc200pc *sensor, const char *tag)
+{
+	static const struct {
+		u16 reg;
+		const char *name;
+	} regs[] = {
+		{ SC200PC_REG_FLIP_MIRROR, "3221" },
+		{ SC200PC_REG_DIGITAL_GAIN_H, "3e06" },
+		{ SC200PC_REG_DIGITAL_GAIN_L, "3e07" },
+		{ SC200PC_REG_ANALOGUE_GAIN, "3e09" },
+		{ SC200PC_REG_BLACK_LEVEL, "3901" },
+		{ SC200PC_REG_VTS_H, "320e" },
+		{ SC200PC_REG_VTS_L, "320f" },
+	};
+	char buf[160];
+	int i, len = 0;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		u8 val;
+		int ret = sc200pc_read_reg(sensor, regs[i].reg, &val);
+
+		if (ret)
+			len += scnprintf(buf + len, sizeof(buf) - len,
+					 "%s=<err:%d> ", regs[i].name, ret);
+		else
+			len += scnprintf(buf + len, sizeof(buf) - len,
+					 "%s=0x%02x ", regs[i].name, val);
+	}
+
+	dev_info(sensor->dev, "%s: %s\n", tag, buf);
+}
+
 static int sc200pc_set_exposure(struct sc200pc *sensor, u32 exposure)
 {
 	int ret;
@@ -414,24 +490,100 @@ static int sc200pc_set_exposure(struct sc200pc *sensor, u32 exposure)
 	 * 12.4 fixed-point value across 0x3e00..0x3e02.
 	 */
 	exposure = clamp_t(u32, exposure,
-			   SC200PC_EXPOSURE_MIN, SC200PC_EXPOSURE_MAX);
+			   SC200PC_EXPOSURE_MIN, sc200pc_exposure_max(sensor));
 
-	ret = sc200pc_write_reg(sensor, 0x3e00, (exposure >> 12) & 0x0f);
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_EXPOSURE_H,
+			       (exposure >> 12) & 0x0f);
 	if (ret)
 		return ret;
 
-	ret = sc200pc_write_reg(sensor, 0x3e01, (exposure >> 4) & 0xff);
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_EXPOSURE_M,
+			       (exposure >> 4) & 0xff);
 	if (ret)
 		return ret;
 
-	return sc200pc_write_reg(sensor, 0x3e02, (exposure & 0x0f) << 4);
+	return sc200pc_write_reg(sensor, SC200PC_REG_EXPOSURE_L,
+				 (exposure & 0x0f) << 4);
 }
 
 static int sc200pc_set_analogue_gain(struct sc200pc *sensor, u32 gain)
 {
 	gain = clamp_t(u32, gain,
 		       SC200PC_ANALOGUE_GAIN_MIN, SC200PC_ANALOGUE_GAIN_MAX);
-	return sc200pc_write_reg(sensor, 0x3e09, gain & 0xff);
+	return sc200pc_write_reg(sensor, SC200PC_REG_ANALOGUE_GAIN,
+				 gain & 0xff);
+}
+
+static int sc200pc_set_digital_gain(struct sc200pc *sensor, u32 gain)
+{
+	static const u8 coarse_map[] = { 0x00, 0x01, 0x03, 0x07, 0x0f, 0x1f };
+	u32 factor = 1;
+	u32 fine;
+	unsigned int idx = 0;
+	int ret;
+
+	gain = clamp_t(u32, gain,
+		       SC200PC_DIGITAL_GAIN_MIN, SC200PC_DIGITAL_GAIN_MAX);
+
+	while (idx + 1 < ARRAY_SIZE(coarse_map) && gain >= factor * 256) {
+		factor <<= 1;
+		idx++;
+	}
+
+	fine = DIV_ROUND_CLOSEST(gain, factor);
+	fine = clamp_t(u32, fine, 0x80, 0xfc);
+	fine = DIV_ROUND_CLOSEST(fine, 4) * 4;
+
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_DIGITAL_GAIN_L, fine);
+	if (ret)
+		return ret;
+
+	return sc200pc_write_reg(sensor, SC200PC_REG_DIGITAL_GAIN_H,
+				 coarse_map[idx]);
+}
+
+/*
+ * Program a total gain request by splitting it across the sensor's analogue
+ * and digital gain stages.
+ *
+ * Userspace sees a single monotonic V4L2_CID_ANALOGUE_GAIN control. The
+ * driver turns that into:
+ *   - analogue gain only, up to the true hardware analogue limit (0x80)
+ *   - analogue gain pinned at 0x80 plus digital gain, above that limit
+ *
+ * The split is intentionally simple: once analogue gain is saturated, the
+ * requested total gain code is written straight into the digital-gain path.
+ * This preserves the existing helper/libcamera gain scale while giving the
+ * simple AGC more headroom at fixed 30 fps.
+ */
+static int sc200pc_set_total_gain(struct sc200pc *sensor, u32 gain)
+{
+	u32 analogue_gain;
+	u32 digital_gain;
+	int ret;
+
+	gain = clamp_t(u32, gain,
+		       SC200PC_ANALOGUE_GAIN_MIN, SC200PC_TOTAL_GAIN_MAX);
+
+	if (gain <= SC200PC_ANALOGUE_GAIN_MAX) {
+		analogue_gain = gain;
+		digital_gain = SC200PC_DIGITAL_GAIN_DEFAULT;
+	} else {
+		/*
+		 * Treat V4L2_CID_ANALOGUE_GAIN as total requested gain. Above the
+		 * true hardware analogue limit (8x = 0x80), spill the remainder into
+		 * the SmartSens-family digital gain path. In this control scale, the
+		 * digital-gain code equals the requested total-gain code.
+		 */
+		analogue_gain = SC200PC_ANALOGUE_GAIN_MAX;
+		digital_gain = gain;
+	}
+
+	ret = sc200pc_set_digital_gain(sensor, digital_gain);
+	if (ret)
+		return ret;
+
+	return sc200pc_set_analogue_gain(sensor, analogue_gain);
 }
 
 static int sc200pc_apply_controls(struct sc200pc *sensor)
@@ -442,7 +594,7 @@ static int sc200pc_apply_controls(struct sc200pc *sensor)
 	if (ret)
 		return ret;
 
-	return sc200pc_set_analogue_gain(sensor, sensor->analogue_gain->val);
+	return sc200pc_set_total_gain(sensor, sensor->analogue_gain->val);
 }
 
 static int sc200pc_set_vts(struct sc200pc *sensor, u16 vts)
@@ -481,6 +633,8 @@ static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 		} else {
 			sensor->cur_vts = vts;
 		}
+		if (!ret)
+			sc200pc_update_exposure_range(sensor);
 		break;
 	}
 	case V4L2_CID_HBLANK:
@@ -499,11 +653,12 @@ static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 		ret = sc200pc_set_exposure(sensor, ctrl->val);
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
-		ret = sc200pc_set_analogue_gain(sensor, ctrl->val);
+		ret = sc200pc_set_total_gain(sensor, ctrl->val);
 		break;
 	case V4L2_CID_DIGITAL_GAIN:
-		/* Accepted but not wired to hardware yet. */
-		ret = 0;
+		ret = sc200pc_set_digital_gain(sensor, ctrl->val);
+		if (!ret)
+			sc200pc_log_key_regs(sensor, "digital-gain update");
 		break;
 	case V4L2_CID_TEST_PATTERN:
 		/*
@@ -646,6 +801,8 @@ static int sc200pc_start_streaming(struct sc200pc *sensor)
 	if (ret)
 		return ret;
 
+	sc200pc_log_key_regs(sensor, "post-init regs");
+
 	/*
 	 * Apply VTS if the HAL changed VBLANK before stream-on.
 	 * The init table sets VTS to SC200PC_VTS_DEF; only re-write
@@ -666,6 +823,7 @@ static int sc200pc_start_streaming(struct sc200pc *sensor)
 	if (ret)
 		return ret;
 
+	sc200pc_log_key_regs(sensor, "post-control regs");
 	dev_info(sensor->dev, "streaming started\n");
 	return 0;
 }
@@ -994,17 +1152,25 @@ static int sc200pc_probe(struct i2c_client *client)
 					     SC200PC_EXPOSURE_MAX,
 					     1, SC200PC_EXPOSURE_DEFAULT);
 
+	/*
+	 * Expose analogue_gain as total requested gain. The real hardware analogue
+	 * stage still tops out at SC200PC_ANALOGUE_GAIN_MAX; values above that are
+	 * automatically spilled into digital gain by sc200pc_set_total_gain().
+	 */
 	sensor->analogue_gain = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
 						  V4L2_CID_ANALOGUE_GAIN,
 						  SC200PC_ANALOGUE_GAIN_MIN,
-						  SC200PC_ANALOGUE_GAIN_MAX,
+						  SC200PC_TOTAL_GAIN_MAX,
 						  1, SC200PC_ANALOGUE_GAIN_DEFAULT);
 
+	/* Separate manual digital-gain control kept for diagnostics/experiments. */
 	sensor->digital_gain = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
 						 V4L2_CID_DIGITAL_GAIN,
 						 SC200PC_DIGITAL_GAIN_MIN,
 						 SC200PC_DIGITAL_GAIN_MAX,
 						 1, SC200PC_DIGITAL_GAIN_DEFAULT);
+
+	sc200pc_update_exposure_range(sensor);
 
 	sensor->test_pattern =
 		v4l2_ctrl_new_std_menu_items(&sensor->ctrls, &sc200pc_ctrl_ops,

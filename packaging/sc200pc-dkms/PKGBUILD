@@ -1,5 +1,5 @@
 pkgname=sc200pc-dkms
-pkgver=0.6.0
+pkgver=0.8.0
 pkgrel=1
 pkgdesc="Samsung/SmartSens SC200PC (SSLC2000) V4L2 sensor driver — DKMS"
 arch=('any')
