@@ -9,7 +9,8 @@
 //     variants share the register map; chip ID and a few PHY-specific
 //     values differ. Validation on SC200PC hardware is expected to reveal
 //     tuning needed for 2-lane MIPI output.
-//   - controls (exposure, gain, test pattern): not yet wired
+//   - controls: exposure, analogue gain, digital gain, VBLANK/HBLANK wired;
+//     test pattern still stubbed
 
 #include <linux/acpi.h>
 #include <linux/clk.h>
@@ -34,6 +35,14 @@
 #define SC200PC_REG_CHIP_ID_H		0x3107
 #define SC200PC_REG_CHIP_ID_L		0x3108
 #define SC200PC_REG_CHIP_REVISION	0x3109
+#define SC200PC_REG_FLIP_MIRROR		0x3221
+#define SC200PC_REG_DIGITAL_GAIN_H	0x3e06
+#define SC200PC_REG_DIGITAL_GAIN_L	0x3e07
+#define SC200PC_REG_EXPOSURE_H		0x3e00
+#define SC200PC_REG_EXPOSURE_M		0x3e01
+#define SC200PC_REG_EXPOSURE_L		0x3e02
+#define SC200PC_REG_ANALOGUE_GAIN	0x3e09
+#define SC200PC_REG_BLACK_LEVEL		0x3901
 
 /*
  * Sensor returns (0x0b << 8) | 0x71 on reg reads of 0x3107/0x3108.
@@ -94,12 +103,12 @@
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
 
 /*
- * Digital gain: the HAL's 3A engine (AIQB) sends V4L2_CID_DIGITAL_GAIN
- * with 128 = 1.0×.  Accept the control so the exposure update path
- * doesn't abort.  Not wired to hardware registers yet.
+ * Digital gain: match the SmartSens SC20x family convention used by the
+ * closest public sibling (SC202CS), where 128 = 1.0× and the gain is
+ * encoded across 0x3e06/0x3e07 as coarse/fine digital gain.
  */
-#define SC200PC_DIGITAL_GAIN_MIN	1
-#define SC200PC_DIGITAL_GAIN_MAX	4096
+#define SC200PC_DIGITAL_GAIN_MIN	128
+#define SC200PC_DIGITAL_GAIN_MAX	4096	/* 32.0x */
 #define SC200PC_DIGITAL_GAIN_DEFAULT	128
 
 /* VTS register pair (big-endian 16-bit). */
@@ -405,6 +414,53 @@ static int sc200pc_write_array(struct sc200pc *sensor,
 	return 0;
 }
 
+static u32 sc200pc_exposure_max(const struct sc200pc *sensor)
+{
+	return max_t(u32, SC200PC_EXPOSURE_MIN,
+		     sensor->cur_vts - SC200PC_EXPOSURE_MAX_MARGIN);
+}
+
+static void sc200pc_update_exposure_range(struct sc200pc *sensor)
+{
+	u32 max_exp = sc200pc_exposure_max(sensor);
+	u32 def_exp = min_t(u32, SC200PC_EXPOSURE_DEFAULT, max_exp);
+
+	__v4l2_ctrl_modify_range(sensor->exposure,
+				 SC200PC_EXPOSURE_MIN, max_exp, 1, def_exp);
+}
+
+static void sc200pc_log_key_regs(struct sc200pc *sensor, const char *tag)
+{
+	static const struct {
+		u16 reg;
+		const char *name;
+	} regs[] = {
+		{ SC200PC_REG_FLIP_MIRROR, "3221" },
+		{ SC200PC_REG_DIGITAL_GAIN_H, "3e06" },
+		{ SC200PC_REG_DIGITAL_GAIN_L, "3e07" },
+		{ SC200PC_REG_ANALOGUE_GAIN, "3e09" },
+		{ SC200PC_REG_BLACK_LEVEL, "3901" },
+		{ SC200PC_REG_VTS_H, "320e" },
+		{ SC200PC_REG_VTS_L, "320f" },
+	};
+	char buf[160];
+	int i, len = 0;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		u8 val;
+		int ret = sc200pc_read_reg(sensor, regs[i].reg, &val);
+
+		if (ret)
+			len += scnprintf(buf + len, sizeof(buf) - len,
+					 "%s=<err:%d> ", regs[i].name, ret);
+		else
+			len += scnprintf(buf + len, sizeof(buf) - len,
+					 "%s=0x%02x ", regs[i].name, val);
+	}
+
+	dev_info(sensor->dev, "%s: %s\n", tag, buf);
+}
+
 static int sc200pc_set_exposure(struct sc200pc *sensor, u32 exposure)
 {
 	int ret;
@@ -414,24 +470,56 @@ static int sc200pc_set_exposure(struct sc200pc *sensor, u32 exposure)
 	 * 12.4 fixed-point value across 0x3e00..0x3e02.
 	 */
 	exposure = clamp_t(u32, exposure,
-			   SC200PC_EXPOSURE_MIN, SC200PC_EXPOSURE_MAX);
+			   SC200PC_EXPOSURE_MIN, sc200pc_exposure_max(sensor));
 
-	ret = sc200pc_write_reg(sensor, 0x3e00, (exposure >> 12) & 0x0f);
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_EXPOSURE_H,
+			       (exposure >> 12) & 0x0f);
 	if (ret)
 		return ret;
 
-	ret = sc200pc_write_reg(sensor, 0x3e01, (exposure >> 4) & 0xff);
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_EXPOSURE_M,
+			       (exposure >> 4) & 0xff);
 	if (ret)
 		return ret;
 
-	return sc200pc_write_reg(sensor, 0x3e02, (exposure & 0x0f) << 4);
+	return sc200pc_write_reg(sensor, SC200PC_REG_EXPOSURE_L,
+				 (exposure & 0x0f) << 4);
 }
 
 static int sc200pc_set_analogue_gain(struct sc200pc *sensor, u32 gain)
 {
 	gain = clamp_t(u32, gain,
 		       SC200PC_ANALOGUE_GAIN_MIN, SC200PC_ANALOGUE_GAIN_MAX);
-	return sc200pc_write_reg(sensor, 0x3e09, gain & 0xff);
+	return sc200pc_write_reg(sensor, SC200PC_REG_ANALOGUE_GAIN,
+				 gain & 0xff);
+}
+
+static int sc200pc_set_digital_gain(struct sc200pc *sensor, u32 gain)
+{
+	static const u8 coarse_map[] = { 0x00, 0x01, 0x03, 0x07, 0x0f, 0x1f };
+	u32 factor = 1;
+	u32 fine;
+	unsigned int idx = 0;
+	int ret;
+
+	gain = clamp_t(u32, gain,
+		       SC200PC_DIGITAL_GAIN_MIN, SC200PC_DIGITAL_GAIN_MAX);
+
+	while (idx + 1 < ARRAY_SIZE(coarse_map) && gain >= factor * 256) {
+		factor <<= 1;
+		idx++;
+	}
+
+	fine = DIV_ROUND_CLOSEST(gain, factor);
+	fine = clamp_t(u32, fine, 0x80, 0xfc);
+	fine = DIV_ROUND_CLOSEST(fine, 4) * 4;
+
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_DIGITAL_GAIN_L, fine);
+	if (ret)
+		return ret;
+
+	return sc200pc_write_reg(sensor, SC200PC_REG_DIGITAL_GAIN_H,
+				 coarse_map[idx]);
 }
 
 static int sc200pc_apply_controls(struct sc200pc *sensor)
@@ -439,6 +527,10 @@ static int sc200pc_apply_controls(struct sc200pc *sensor)
 	int ret;
 
 	ret = sc200pc_set_exposure(sensor, sensor->exposure->val);
+	if (ret)
+		return ret;
+
+	ret = sc200pc_set_digital_gain(sensor, sensor->digital_gain->val);
 	if (ret)
 		return ret;
 
@@ -481,6 +573,8 @@ static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 		} else {
 			sensor->cur_vts = vts;
 		}
+		if (!ret)
+			sc200pc_update_exposure_range(sensor);
 		break;
 	}
 	case V4L2_CID_HBLANK:
@@ -502,8 +596,9 @@ static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 		ret = sc200pc_set_analogue_gain(sensor, ctrl->val);
 		break;
 	case V4L2_CID_DIGITAL_GAIN:
-		/* Accepted but not wired to hardware yet. */
-		ret = 0;
+		ret = sc200pc_set_digital_gain(sensor, ctrl->val);
+		if (!ret)
+			sc200pc_log_key_regs(sensor, "digital-gain update");
 		break;
 	case V4L2_CID_TEST_PATTERN:
 		/*
@@ -646,6 +741,8 @@ static int sc200pc_start_streaming(struct sc200pc *sensor)
 	if (ret)
 		return ret;
 
+	sc200pc_log_key_regs(sensor, "post-init regs");
+
 	/*
 	 * Apply VTS if the HAL changed VBLANK before stream-on.
 	 * The init table sets VTS to SC200PC_VTS_DEF; only re-write
@@ -666,6 +763,7 @@ static int sc200pc_start_streaming(struct sc200pc *sensor)
 	if (ret)
 		return ret;
 
+	sc200pc_log_key_regs(sensor, "post-control regs");
 	dev_info(sensor->dev, "streaming started\n");
 	return 0;
 }
@@ -1005,6 +1103,8 @@ static int sc200pc_probe(struct i2c_client *client)
 						 SC200PC_DIGITAL_GAIN_MIN,
 						 SC200PC_DIGITAL_GAIN_MAX,
 						 1, SC200PC_DIGITAL_GAIN_DEFAULT);
+
+	sc200pc_update_exposure_range(sensor);
 
 	sensor->test_pattern =
 		v4l2_ctrl_new_std_menu_items(&sensor->ctrls, &sc200pc_ctrl_ops,
