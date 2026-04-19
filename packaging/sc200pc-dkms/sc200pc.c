@@ -946,7 +946,7 @@ static int sc200pc_probe(struct i2c_client *client)
 
 	sensor->cur_vts = SC200PC_VTS_DEF;
 
-	ret = v4l2_ctrl_handler_init(&sensor->ctrls, 9);
+	ret = v4l2_ctrl_handler_init(&sensor->ctrls, 11);
 	if (ret)
 		goto err_entity_cleanup;
 
@@ -1011,6 +1011,44 @@ static int sc200pc_probe(struct i2c_client *client)
 					     V4L2_CID_TEST_PATTERN,
 					     ARRAY_SIZE(sc200pc_test_pattern_menu) - 1,
 					     0, 0, sc200pc_test_pattern_menu);
+
+	/*
+	 * Register V4L2_CID_CAMERA_ORIENTATION and
+	 * V4L2_CID_CAMERA_SENSOR_ROTATION from firmware-node properties.
+	 * libcamera and WirePlumber's libcamera SPA source require these;
+	 * without them WirePlumber aborts during camera enumeration.
+	 *
+	 * The ACPI SSDB on Panther Lake does not always advertise these
+	 * properties — treat a parse miss as "defaults" rather than fatal.
+	 */
+	{
+		struct v4l2_fwnode_device_properties props;
+
+		/*
+		 * Sets orientation/rotation to V4L2_FWNODE_PROPERTY_UNSET if
+		 * the fwnode lacks them; returns 0 in that case. Only fails
+		 * if the property value is invalid.
+		 */
+		ret = v4l2_fwnode_device_parse(dev, &props);
+		if (ret) {
+			dev_warn(dev, "fwnode device parse failed (%d); skipping orientation/rotation ctrls\n",
+				 ret);
+		} else {
+			if (props.orientation == V4L2_FWNODE_PROPERTY_UNSET)
+				props.orientation = V4L2_FWNODE_ORIENTATION_FRONT;
+			if (props.rotation == V4L2_FWNODE_PROPERTY_UNSET)
+				props.rotation = 0;
+
+			ret = v4l2_ctrl_new_fwnode_properties(&sensor->ctrls,
+							      &sc200pc_ctrl_ops,
+							      &props);
+			if (ret) {
+				dev_err(dev, "failed to register fwnode ctrls: %d\n",
+					ret);
+				goto err_ctrls_free;
+			}
+		}
+	}
 
 	if (sensor->ctrls.error) {
 		ret = sensor->ctrls.error;

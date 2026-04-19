@@ -1,14 +1,13 @@
-pkgname=ipu-bridge-sslc2000
+pkgname=ipu-bridge-sslc2000-dkms
 pkgver=6.19.10.r1
 pkgrel=1
-pkgdesc="Intel IPU bridge module with Samsung SSLC2000 (SC200PC) added to supported sensors"
-arch=('x86_64')
-url="https://github.com/jabbslad/omarchy-extras"
+pkgdesc="Intel IPU bridge DKMS module with Samsung SSLC2000 (SC200PC) added to supported sensors"
+arch=('any')
+url="https://github.com/jabbslad/sc200pc-linux"
 license=('GPL-2.0-only')
 depends=('dkms')
-makedepends=()
-conflicts=()
-replaces=()
+conflicts=('ipu-bridge-sslc2000')
+replaces=('ipu-bridge-sslc2000')
 source=(
   'README.md'
   'dkms.conf'
@@ -29,7 +28,8 @@ prepare() {
 }
 
 package() {
-  local srcdir_pkg="/usr/src/${pkgname}-${pkgver}"
+  local _srcname="${pkgname%-dkms}"
+  local srcdir_pkg="/usr/src/${_srcname}-${pkgver}"
 
   install -d "${pkgdir}${srcdir_pkg}"
   install -m644 "${srcdir}/README.md"     "${pkgdir}${srcdir_pkg}/README.md"
