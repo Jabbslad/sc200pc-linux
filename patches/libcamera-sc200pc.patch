@@ -21,9 +21,8 @@ V4L2_CID_ANALOGUE_GAIN) is linear in 1/16 steps:
     code 0xff -> 15.9375x
 
 giving the AnalogueGainLinear{ m0=1, c0=0, m1=0, c1=16 } model,
-i.e. gain(code) = code / 16. Black level pedestal per the
-SmartSens SC20x family is 64 at 10 bits, normalised to 4096 for
-the 16-bit libipa scale (matches imx219 / imx214).
+i.e. gain(code) = code / 16. Black level is left unset so the
+simple soft ISP auto-detects it from the frame histogram.
 
 Also register static sensor properties so CameraSensorProperties
 stops warning and the pipeline gets correct sensor delays and
@@ -32,15 +31,15 @@ datasheet).
 
 Signed-off-by: Jabbslad <jabbslad@gmail.com>
 ---
- src/ipa/libipa/camera_sensor_helper.cpp          | 12 ++++++++++++
+ src/ipa/libipa/camera_sensor_helper.cpp          | 11 +++++++++++
  src/libcamera/sensor/camera_sensor_properties.cpp | 10 ++++++++++
- 2 files changed, 22 insertions(+)
+ 2 files changed, 21 insertions(+)
 
 diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
 index XXXXXXX..XXXXXXX 100644
 --- a/src/ipa/libipa/camera_sensor_helper.cpp
 +++ b/src/ipa/libipa/camera_sensor_helper.cpp
-@@ -788,6 +788,18 @@ public:
+@@ -788,6 +788,17 @@ public:
  };
  REGISTER_CAMERA_SENSOR_HELPER("ov13858", CameraSensorHelperOv13858)
 
@@ -49,8 +48,7 @@ index XXXXXXX..XXXXXXX 100644
 +public:
 +	CameraSensorHelperSc200pc()
 +	{
-+		/* From SmartSens SC20x datasheet: black level 64 at 10 bits. */
-+		blackLevel_ = 4096;
++		/* Black level auto-detected by the soft ISP from histogram. */
 +		gain_ = AnalogueGainLinear{ 1, 0, 0, 16 };
 +	}
 +};
