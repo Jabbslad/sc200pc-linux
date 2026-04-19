@@ -100,9 +100,9 @@ remaining pieces.
 - **CPU cost:** software ISP runs on the CPU, costing ~5–15% of one
   core continuously while the camera is in use.
 
-## See also
+## IPA tuning
 
-- [`sc200pc-arch-packaging-plan.md`](sc200pc-arch-packaging-plan.md)
-  — packaging design notes.
-- [`sc200pc-kernel-patch-checklist.md`](sc200pc-kernel-patch-checklist.md)
-  — what the upstream kernel submission would need.
+The IPA YAML (`packaging/libcamera-sc200pc/sc200pc.yaml`) controls
+black level, colour correction matrices, AWB, and AGC for the simple
+software ISP. The current values are a first-pass heuristic — proper
+tuning against a colour chart is the main remaining work item.
