@@ -50,18 +50,28 @@ echo "==> libcamera enumeration"
 if command -v cam >/dev/null 2>&1; then
   cam_out="$(cam -l 2>&1)" || { echo "cam -l failed"; fail=1; }
   echo "$cam_out"
-  if grep -q "Failed to create camera sensor helper for sc200pc" <<<"$cam_out"; then
+  # On this project's zero-libcamera-patch stack we intentionally do
+  # NOT ship a sensor helper or properties entry. The warnings below
+  # are expected and non-fatal:
+  #
+  #   WARN IPASoft: Failed to create camera sensor helper for sc200pc
+  #   WARN No static properties available for 'sc200pc'
+  #
+  # Real failure modes we still want to catch:
+  #   * camera is not enumerated at all
+  #   * sc200pc.yaml tuning file is missing (falls back to uncalibrated.yaml)
+
+  if ! grep -q "Adding camera" <<<"$cam_out"; then
     echo
-    echo "WARNING: libcamera is missing the SC200PC CameraSensorHelper."
-    echo "         AGC will not converge; frames will be dark and green-tinted."
-    echo "         Ensure libcamera-sc200pc is installed (not stock libcamera)."
+    echo "FAIL: libcamera did not enumerate any camera."
     fail=1
   fi
-  if grep -q "No static properties available for 'sc200pc'" <<<"$cam_out"; then
+
+  if grep -q "falling back to .*uncalibrated.yaml" <<<"$cam_out"; then
     echo
-    echo "WARNING: libcamera has no CameraSensorProperties entry for sc200pc."
-    echo "         Sensor delays / unit cell size fall back to defaults."
-    echo "         Ensure libcamera-sc200pc is installed (not stock libcamera)."
+    echo "FAIL: SC200PC tuning file missing from"
+    echo "      /usr/share/libcamera/ipa/simple/sc200pc.yaml"
+    echo "      Is galaxybook6pro-camera installed?"
     fail=1
   fi
 fi

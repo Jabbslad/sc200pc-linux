@@ -26,14 +26,18 @@ fi
 
 AUR_HELPER="$(command -v paru || command -v yay)"
 
-# Remove packages that conflict with the native libcamera approach:
-# - old-named packages from pre-AUR-rename layout
+# Remove packages that conflict with the current stack:
+# - legacy package names from earlier layouts
 # - Intel HAL packages (mutually exclusive with libcamera)
+# - the previous libcamera fork (now replaced by stock libcamera + tuning in
+#   galaxybook6pro-camera)
 _old=()
 for p in ipu-bridge-sslc2000 sc200pc-libcamera-pipewire \
          intel-ipu7-camera intel-ipu7-camera-sc200pc \
          intel-ipu7-camera-sc200pc-debug sc200pc-ipu75xa-config \
-         v4l2-relayd; do
+         v4l2-relayd \
+         libcamera-sc200pc libcamera-sc200pc-ipa libcamera-sc200pc-tools \
+         gst-plugin-libcamera-sc200pc; do
   if pacman -Qq "$p" >/dev/null 2>&1; then
     _old+=("$p")
   fi
@@ -68,14 +72,11 @@ echo "==> galaxybook6pro-camera not yet on AUR; building from $REPO_ROOT/packagi
 for pkg in \
     ipu-bridge-sslc2000-dkms \
     sc200pc-dkms \
-    libcamera-sc200pc \
     galaxybook6pro-camera
 do
   echo
   echo "    -> $pkg"
-  # Don't use --noconfirm: libcamera-sc200pc triggers pacman replace-prompts
-  # for stock libcamera/libcamera-ipa/etc. that must be accepted interactively.
-  ( cd "$REPO_ROOT/packaging/$pkg" && makepkg -si --needed )
+  ( cd "$REPO_ROOT/packaging/$pkg" && makepkg -si --needed --noconfirm )
 done
 
 echo

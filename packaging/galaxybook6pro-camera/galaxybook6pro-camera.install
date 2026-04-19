@@ -19,14 +19,27 @@ _sc200pc_activate() {
 
   udevadm control --reload 2>/dev/null || true
 
+  # DKMS itself runs depmod, but re-running it here is cheap and papers
+  # over any packaging hook ordering quirks.
+  depmod -a 2>/dev/null || true
+
+  # If the patched ipu_bridge + intel_ipu7 stack happens to already be
+  # in memory (and has enumerated the SSLC2000 i2c client), loading
+  # sc200pc here binds the sensor without any manual step. On first
+  # install after a fresh boot the stack is the stock one and this is
+  # a no-op; the user still needs the reload sequence printed below.
+  modprobe sc200pc 2>/dev/null || true
+
   cat <<'MSG'
 >>> galaxybook6pro-camera installed.
 >>>
 >>> Reboot to load the DKMS kernel modules, or reload without rebooting:
 >>>
 >>>   systemctl --user stop wireplumber pipewire
->>>   sudo rmmod sc200pc intel_ipu7_isys intel_ipu7 ipu_bridge
+>>>   sudo rmmod sc200pc 2>/dev/null || true
+>>>   sudo rmmod intel_ipu7_isys intel_ipu7 ipu_bridge
 >>>   sudo modprobe intel_ipu7
+>>>   sudo modprobe sc200pc
 >>>   systemctl --user start pipewire
 >>>
 >>> Verify with:
