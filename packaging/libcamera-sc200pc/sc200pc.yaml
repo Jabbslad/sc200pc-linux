@@ -2,8 +2,9 @@
 #
 # Tuning file for the Samsung/SmartSens SC200PC (ACPI SSLC2000).
 #
-# BlackLevel from helper (512 = 8 at 10-bit, matching BLC register 0x3901).
-# CCM adds saturation with all cross-terms negative to avoid green cast.
+# Green row MUST be identity [0, 1, 0] — any cross-terms in the green
+# row feed back through AWB and reintroduce a green cast. Saturation
+# comes only from boosting R and B channels.
 %YAML 1.1
 ---
 version: 1
@@ -13,17 +14,17 @@ algorithms:
   - Ccm:
       ccms:
         - ct: 2700
-          ccm: [ 1.55, -0.50, -0.05,
-                -0.05,  1.10, -0.05,
-                -0.05, -0.50,  1.55 ]
+          ccm: [ 1.80, -0.70, -0.10,
+                 0.00,  1.00,  0.00,
+                -0.10, -0.70,  1.80 ]
         - ct: 4800
-          ccm: [ 1.45, -0.40, -0.05,
-                -0.05,  1.10, -0.05,
-                -0.05, -0.40,  1.45 ]
+          ccm: [ 1.60, -0.52, -0.08,
+                 0.00,  1.00,  0.00,
+                -0.08, -0.52,  1.60 ]
         - ct: 6500
-          ccm: [ 1.40, -0.35, -0.05,
-                -0.05,  1.10, -0.05,
-                -0.05, -0.35,  1.40 ]
+          ccm: [ 1.50, -0.42, -0.08,
+                 0.00,  1.00,  0.00,
+                -0.08, -0.42,  1.50 ]
   - Adjust:
   - Agc:
 ...
