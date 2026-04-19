@@ -1,0 +1,59 @@
+_sc200pc_activate() {
+  # Remove HAL-only WirePlumber overrides that would hide the camera
+  # from libcamera consumers. These come from earlier attempts at the
+  # proprietary Intel IPU7 vendor HAL path, which this meta-package
+  # does not take.
+  rm -f \
+    /etc/wireplumber/wireplumber.conf.d/10-disable-libcamera.conf \
+    /etc/wireplumber/wireplumber.conf.d/60-hide-ipu7-v4l2.conf
+
+  # Omarchy (and some other distros) ship a blanket libcamera-disable
+  # rule. Remove it so the SC200PC can be exposed via libcamera/PipeWire.
+  rm -f /etc/wireplumber/wireplumber.conf.d/99-disable-libcamera.conf
+
+  # Stop AND disable the HAL-path v4l2-relayd service. It has
+  # Restart=always and an ExecStartPost that restarts WirePlumber —
+  # if left enabled it crash-loops on every boot and takes audio down
+  # with it (the service is useless on the native libcamera path).
+  systemctl stop v4l2-relayd@ipu7 2>/dev/null || true
+  systemctl disable v4l2-relayd@ipu7 2>/dev/null || true
+
+  # Remove the HAL-era override that injects WirePlumber restarts into
+  # the v4l2-relayd service. Even if someone re-enables the unit later
+  # the override would still cause the restart storm.
+  rm -rf /etc/systemd/system/v4l2-relayd@ipu7.service.d
+  systemctl daemon-reload 2>/dev/null || true
+
+  # Reload udev so the bundled 72-ipu7-native-isys.rules takes effect
+  # without a reboot.
+  udevadm control --reload 2>/dev/null || true
+  udevadm trigger --subsystem-match=video4linux 2>/dev/null || true
+
+  cat <<'MSG'
+>>> galaxybook6pro-camera installed.
+>>>
+>>> The SC200PC kernel modules are built via DKMS — reboot to load them,
+>>> or:
+>>>
+>>>   sudo rmmod intel_ipu7_psys intel_ipu7_isys intel_ipu7 ipu_acpi ipu_bridge
+>>>   sudo modprobe intel_ipu7
+>>>
+>>> Then restart the user camera pipeline:
+>>>
+>>>   systemctl --user restart wireplumber pipewire xdg-desktop-portal
+>>>
+>>> Verify with:
+>>>
+>>>   sc200pc-libcamera-check
+>>>   cam -l
+>>>   v4l2-ctl --stream-mmap --stream-count=1 -d /dev/video0
+MSG
+}
+
+post_install() {
+  _sc200pc_activate
+}
+
+post_upgrade() {
+  _sc200pc_activate
+}

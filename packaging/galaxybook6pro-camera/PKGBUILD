@@ -1,0 +1,28 @@
+# Meta-package for the Samsung Galaxy Book6 Pro (NP940XJG-KGDUK)
+# SC200PC front-camera enablement on Linux. Pulls in the three
+# component packages and handles one-time cleanup of HAL-only
+# WirePlumber overrides.
+
+pkgname=galaxybook6pro-camera
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Meta-package enabling the Galaxy Book6 Pro SC200PC front camera (IPU7, Panther Lake)"
+arch=('any')
+url="https://github.com/jabbslad/sc200pc-linux"
+license=('MIT')
+install="${pkgname}.install"
+depends=(
+  'ipu-bridge-sslc2000-dkms'
+  'sc200pc-dkms'
+  'libcamera-sc200pc'
+  'pipewire-libcamera'
+)
+source=("${pkgname}.install" "50-ipu7-hide-v4l2.conf")
+sha256sums=('SKIP' 'SKIP')
+
+# No build step — this is a metadata-only package. The .install scriptlet
+# handles udev / WirePlumber / PipeWire restart on first install.
+package() {
+  install -vDm 644 "$srcdir/50-ipu7-hide-v4l2.conf" \
+    "$pkgdir/etc/wireplumber/wireplumber.conf.d/50-ipu7-hide-v4l2.conf"
+}
