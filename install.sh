@@ -79,7 +79,10 @@ do
 done
 
 echo
-echo "==> Done. Verify with:"
-echo "    sc200pc-libcamera-check"
-echo "    cam -l"
-echo "    v4l2-ctl --stream-mmap --stream-count=1 -d /dev/video0"
+echo "==> Done. Reboot to load the kernel modules, or:"
+echo "    systemctl --user stop wireplumber pipewire"
+echo "    sudo rmmod sc200pc intel_ipu7_isys intel_ipu7 ipu_bridge"
+echo "    sudo modprobe intel_ipu7"
+echo "    systemctl --user start pipewire"
+echo
+echo "    Then verify with: sc200pc-libcamera-check"

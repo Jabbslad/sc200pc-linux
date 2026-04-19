@@ -22,21 +22,17 @@ _sc200pc_activate() {
   cat <<'MSG'
 >>> galaxybook6pro-camera installed.
 >>>
->>> The SC200PC kernel modules are built via DKMS — reboot to load them,
->>> or:
+>>> Reboot to load the DKMS kernel modules, or reload without rebooting:
 >>>
->>>   sudo rmmod intel_ipu7_psys intel_ipu7_isys intel_ipu7 ipu_acpi ipu_bridge
+>>>   systemctl --user stop wireplumber pipewire
+>>>   sudo rmmod sc200pc intel_ipu7_isys intel_ipu7 ipu_bridge
 >>>   sudo modprobe intel_ipu7
->>>
->>> Then restart the user camera pipeline:
->>>
->>>   systemctl --user restart wireplumber pipewire xdg-desktop-portal
+>>>   systemctl --user start pipewire
 >>>
 >>> Verify with:
 >>>
 >>>   sc200pc-libcamera-check
 >>>   cam -l
->>>   v4l2-ctl --stream-mmap --stream-count=1 -d /dev/video0
 MSG
 }
 

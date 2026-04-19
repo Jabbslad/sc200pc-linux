@@ -40,20 +40,20 @@ packages locally from `packaging/`.
 ## After install
 
 The DKMS modules build on install but load at next boot. Either reboot
-or force-reload:
+or reload without rebooting:
 
 ```bash
-sudo rmmod intel_ipu7_psys intel_ipu7_isys intel_ipu7 ipu_acpi ipu_bridge
+systemctl --user stop wireplumber pipewire
+sudo rmmod sc200pc intel_ipu7_isys intel_ipu7 ipu_bridge
 sudo modprobe intel_ipu7
-systemctl --user restart wireplumber pipewire xdg-desktop-portal
+systemctl --user start pipewire
 ```
 
 Verify:
 
 ```bash
-sc200pc-libcamera-check                                      # full diagnostic
-cam -l                                                       # libcamera enumeration
-v4l2-ctl --stream-mmap --stream-count=1 -d /dev/video0       # raw frame
+sc200pc-libcamera-check
+cam -l
 ```
 
 ## Package layout
