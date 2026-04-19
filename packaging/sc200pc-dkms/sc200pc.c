@@ -99,13 +99,33 @@
 #define SC200PC_EXPOSURE_MAX		(SC200PC_VTS_DEF - SC200PC_EXPOSURE_MAX_MARGIN)
 #define SC200PC_EXPOSURE_DEFAULT	0x08b0
 #define SC200PC_ANALOGUE_GAIN_MIN	0x10
-#define SC200PC_ANALOGUE_GAIN_MAX	0x80	/* 8.0x (AIQB r12 confirms 8x) */
+#define SC200PC_ANALOGUE_GAIN_MAX	0x80	/* true hardware analogue max = 8.0x */
+/*
+ * The driver advertises V4L2_CID_ANALOGUE_GAIN as a total gain request,
+ * not as pure hardware analogue gain. Requests up to 0x80 are programmed
+ * fully as analogue gain; above 0x80, the driver clamps analogue gain at
+ * its true hardware maximum and spills the excess into the digital-gain
+ * registers. This keeps libcamera's simple AGC working at 30 fps without
+ * needing userspace changes to explicitly drive digital gain.
+ *
+ * Control scale matches the existing SC200PC helper model: gain code / 16.
+ * Examples:
+ *   0x10 = 1.0x total gain   -> analogue 1.0x, digital 1.0x
+ *   0x80 = 8.0x total gain   -> analogue 8.0x, digital 1.0x
+ *   0x100 = 16.0x total gain -> analogue 8.0x, digital 2.0x
+ *   0x400 = 64.0x total gain -> analogue 8.0x, digital 8.0x
+ */
+#define SC200PC_TOTAL_GAIN_MAX		0x400	/* 64.0x total via analogue+digital */
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
 
 /*
  * Digital gain: match the SmartSens SC20x family convention used by the
  * closest public sibling (SC202CS), where 128 = 1.0× and the gain is
  * encoded across 0x3e06/0x3e07 as coarse/fine digital gain.
+ *
+ * This control remains exposed separately for diagnostics and manual
+ * experiments, but normal auto-exposure flow uses sc200pc_set_total_gain()
+ * via the advertised analogue-gain control above.
  */
 #define SC200PC_DIGITAL_GAIN_MIN	128
 #define SC200PC_DIGITAL_GAIN_MAX	4096	/* 32.0x */
@@ -522,6 +542,50 @@ static int sc200pc_set_digital_gain(struct sc200pc *sensor, u32 gain)
 				 coarse_map[idx]);
 }
 
+/*
+ * Program a total gain request by splitting it across the sensor's analogue
+ * and digital gain stages.
+ *
+ * Userspace sees a single monotonic V4L2_CID_ANALOGUE_GAIN control. The
+ * driver turns that into:
+ *   - analogue gain only, up to the true hardware analogue limit (0x80)
+ *   - analogue gain pinned at 0x80 plus digital gain, above that limit
+ *
+ * The split is intentionally simple: once analogue gain is saturated, the
+ * requested total gain code is written straight into the digital-gain path.
+ * This preserves the existing helper/libcamera gain scale while giving the
+ * simple AGC more headroom at fixed 30 fps.
+ */
+static int sc200pc_set_total_gain(struct sc200pc *sensor, u32 gain)
+{
+	u32 analogue_gain;
+	u32 digital_gain;
+	int ret;
+
+	gain = clamp_t(u32, gain,
+		       SC200PC_ANALOGUE_GAIN_MIN, SC200PC_TOTAL_GAIN_MAX);
+
+	if (gain <= SC200PC_ANALOGUE_GAIN_MAX) {
+		analogue_gain = gain;
+		digital_gain = SC200PC_DIGITAL_GAIN_DEFAULT;
+	} else {
+		/*
+		 * Treat V4L2_CID_ANALOGUE_GAIN as total requested gain. Above the
+		 * true hardware analogue limit (8x = 0x80), spill the remainder into
+		 * the SmartSens-family digital gain path. In this control scale, the
+		 * digital-gain code equals the requested total-gain code.
+		 */
+		analogue_gain = SC200PC_ANALOGUE_GAIN_MAX;
+		digital_gain = gain;
+	}
+
+	ret = sc200pc_set_digital_gain(sensor, digital_gain);
+	if (ret)
+		return ret;
+
+	return sc200pc_set_analogue_gain(sensor, analogue_gain);
+}
+
 static int sc200pc_apply_controls(struct sc200pc *sensor)
 {
 	int ret;
@@ -530,11 +594,7 @@ static int sc200pc_apply_controls(struct sc200pc *sensor)
 	if (ret)
 		return ret;
 
-	ret = sc200pc_set_digital_gain(sensor, sensor->digital_gain->val);
-	if (ret)
-		return ret;
-
-	return sc200pc_set_analogue_gain(sensor, sensor->analogue_gain->val);
+	return sc200pc_set_total_gain(sensor, sensor->analogue_gain->val);
 }
 
 static int sc200pc_set_vts(struct sc200pc *sensor, u16 vts)
@@ -593,7 +653,7 @@ static int sc200pc_s_ctrl(struct v4l2_ctrl *ctrl)
 		ret = sc200pc_set_exposure(sensor, ctrl->val);
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
-		ret = sc200pc_set_analogue_gain(sensor, ctrl->val);
+		ret = sc200pc_set_total_gain(sensor, ctrl->val);
 		break;
 	case V4L2_CID_DIGITAL_GAIN:
 		ret = sc200pc_set_digital_gain(sensor, ctrl->val);
@@ -1092,12 +1152,18 @@ static int sc200pc_probe(struct i2c_client *client)
 					     SC200PC_EXPOSURE_MAX,
 					     1, SC200PC_EXPOSURE_DEFAULT);
 
+	/*
+	 * Expose analogue_gain as total requested gain. The real hardware analogue
+	 * stage still tops out at SC200PC_ANALOGUE_GAIN_MAX; values above that are
+	 * automatically spilled into digital gain by sc200pc_set_total_gain().
+	 */
 	sensor->analogue_gain = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
 						  V4L2_CID_ANALOGUE_GAIN,
 						  SC200PC_ANALOGUE_GAIN_MIN,
-						  SC200PC_ANALOGUE_GAIN_MAX,
+						  SC200PC_TOTAL_GAIN_MAX,
 						  1, SC200PC_ANALOGUE_GAIN_DEFAULT);
 
+	/* Separate manual digital-gain control kept for diagnostics/experiments. */
 	sensor->digital_gain = v4l2_ctrl_new_std(&sensor->ctrls, &sc200pc_ctrl_ops,
 						 V4L2_CID_DIGITAL_GAIN,
 						 SC200PC_DIGITAL_GAIN_MIN,
