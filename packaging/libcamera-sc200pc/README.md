@@ -40,9 +40,6 @@ come out dark and green-tinted.
 
 - `/usr/share/libcamera/ipa/simple/sc200pc.yaml` — first-pass tuning
   (BlackLevel, conservative CCMs, AGC/AWB enabled).
-- `/etc/udev/rules.d/72-ipu7-native-isys.rules` — restore `video` /
-  `uaccess` permissions on `Intel IPU7 ISYS Capture` and V4L2 subdev
-  nodes so libcamera can access the sensor.
 - `/usr/bin/sc200pc-libcamera-check` — diagnostic helper.
 
 ## Rebase on Arch libcamera bumps

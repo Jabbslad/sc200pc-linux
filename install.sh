@@ -43,12 +43,12 @@ if (( ${#_old[@]} )); then
   sudo pacman -Rdd --noconfirm "${_old[@]}"
 fi
 
-# Clean up orphaned files left behind by removed old packages. pacman
-# preserves backup=() files or modified config as .pacsave; the libcamera
-# fork ships the same udev rule path and pacman will refuse to overwrite
-# a file it doesn't own.
+# Clean up orphaned files left behind by removed old packages.
 for f in \
-    /etc/udev/rules.d/72-ipu7-native-isys.rules
+    /etc/udev/rules.d/72-ipu7-native-isys.rules \
+    /etc/wireplumber/wireplumber.conf.d/10-disable-libcamera.conf \
+    /etc/wireplumber/wireplumber.conf.d/60-hide-ipu7-v4l2.conf \
+    /etc/wireplumber/wireplumber.conf.d/99-disable-libcamera.conf
 do
   if [[ -f "$f" ]] && ! pacman -Qo "$f" >/dev/null 2>&1; then
     echo "==> Removing orphaned $f"
