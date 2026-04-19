@@ -106,5 +106,3 @@ remaining pieces.
   — packaging design notes.
 - [`sc200pc-kernel-patch-checklist.md`](sc200pc-kernel-patch-checklist.md)
   — what the upstream kernel submission would need.
-- [`sc200pc-driver-skeleton.c`](sc200pc-driver-skeleton.c) — early
-  driver skeleton from before the Windows reverse-engineering work.
