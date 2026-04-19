@@ -17,7 +17,7 @@ Target result:
 
 Start from:
 
-- [sc200pc-driver-skeleton.c](/home/jabbslad/dev/omarchy-extras/sc200pc-driver-skeleton.c)
+- [sc200pc-driver-skeleton.c](sc200pc-driver-skeleton.c)
 
 ### Existing files to edit
 

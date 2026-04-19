@@ -54,14 +54,14 @@ if command -v cam >/dev/null 2>&1; then
     echo
     echo "WARNING: libcamera is missing the SC200PC CameraSensorHelper."
     echo "         AGC will not converge; frames will be dark and green-tinted."
-    echo "         Run: rebuild-libcamera-with-sc200pc-support"
+    echo "         Ensure libcamera-sc200pc is installed (not stock libcamera)."
     fail=1
   fi
   if grep -q "No static properties available for 'sc200pc'" <<<"$cam_out"; then
     echo
     echo "WARNING: libcamera has no CameraSensorProperties entry for sc200pc."
     echo "         Sensor delays / unit cell size fall back to defaults."
-    echo "         Run: rebuild-libcamera-with-sc200pc-support"
+    echo "         Ensure libcamera-sc200pc is installed (not stock libcamera)."
     fail=1
   fi
 fi

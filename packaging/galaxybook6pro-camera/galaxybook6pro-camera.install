@@ -17,10 +17,7 @@ _sc200pc_activate() {
   rm -rf /etc/systemd/system/v4l2-relayd@ipu7.service.d
   systemctl daemon-reload 2>/dev/null || true
 
-  # Reload udev so the bundled 72-ipu7-native-isys.rules takes effect
-  # without a reboot.
   udevadm control --reload 2>/dev/null || true
-  udevadm trigger --subsystem-match=video4linux 2>/dev/null || true
 
   cat <<'MSG'
 >>> galaxybook6pro-camera installed.

@@ -1,4 +1,4 @@
-From: omarchy-extras <jabbslad@users.noreply.github.com>
+From: James Abbott <jabbslad@users.noreply.github.com>
 Date: Fri, 17 Apr 2026 21:40:00 +0100
 Subject: [PATCH] media: pci: ipu-bridge: add Samsung SC200PC (SSLC2000)
 
@@ -27,7 +27,7 @@ V4L2 control once finalized.
 
 Base: Linux v6.19.10 (byte-identical to archlinux/linux v6.19.10-arch1).
 
-Signed-off-by: omarchy-extras <jabbslad@users.noreply.github.com>
+Signed-off-by: James Abbott <jabbslad@users.noreply.github.com>
 ---
  drivers/media/pci/intel/ipu-bridge.c | 2 ++
  1 file changed, 2 insertions(+)
