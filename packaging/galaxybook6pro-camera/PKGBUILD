@@ -1,10 +1,18 @@
 # Meta-package for the Samsung Galaxy Book6 Pro (NP940XJG-KGDUK)
-# SC200PC front-camera enablement via native libcamera on Linux.
+# SC200PC front-camera enablement via stock libcamera on Linux.
+#
+# This package ships:
+#   * WirePlumber rule hiding raw IPU7 ISYS V4L2 nodes
+#   * SC200PC simple-IPA tuning YAML (loaded by stock libcamera)
+#   * sc200pc-libcamera-check diagnostic
+#
+# It also depends on the two DKMS packages that provide the actual
+# kernel drivers, plus the stock libcamera + PipeWire libcamera bits.
 
 pkgname=galaxybook6pro-camera
-pkgver=1.0.0
-pkgrel=2
-pkgdesc="Meta-package enabling the Galaxy Book6 Pro SC200PC front camera (IPU7, Panther Lake)"
+pkgver=1.1.0
+pkgrel=1
+pkgdesc="Galaxy Book6 Pro SC200PC front-camera enablement (IPU7, Panther Lake)"
 arch=('any')
 url="https://github.com/jabbslad/sc200pc-linux"
 license=('MIT')
@@ -12,14 +20,41 @@ install="${pkgname}.install"
 depends=(
   'ipu-bridge-sslc2000-dkms'
   'sc200pc-dkms'
-  'libcamera-sc200pc'
+  'libcamera'
+  'libcamera-ipa'
   'pipewire-libcamera'
 )
-conflicts=('intel-ipu7-camera' 'intel-ipu7-camera-sc200pc' 'sc200pc-ipu75xa-config')
-source=("${pkgname}.install" "50-ipu7-hide-v4l2.conf")
-sha256sums=('SKIP' 'SKIP')
+optdepends=(
+  'libcamera-tools: cam / qcam diagnostic tools'
+  'gst-plugin-libcamera: GStreamer integration'
+)
+conflicts=(
+  'intel-ipu7-camera'
+  'intel-ipu7-camera-sc200pc'
+  'sc200pc-ipu75xa-config'
+  'libcamera-sc200pc'
+  'libcamera-sc200pc-ipa'
+  'libcamera-sc200pc-tools'
+  'gst-plugin-libcamera-sc200pc'
+)
+source=(
+  "${pkgname}.install"
+  '50-ipu7-hide-v4l2.conf'
+  'sc200pc.yaml'
+  'sc200pc-libcamera-check'
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
+  # WirePlumber: hide raw IPU7 ISYS V4L2 nodes
   install -vDm 644 "$srcdir/50-ipu7-hide-v4l2.conf" \
     "$pkgdir/etc/wireplumber/wireplumber.conf.d/50-ipu7-hide-v4l2.conf"
+
+  # libcamera simple-IPA tuning for the SC200PC sensor
+  install -vDm 644 "$srcdir/sc200pc.yaml" \
+    "$pkgdir/usr/share/libcamera/ipa/simple/sc200pc.yaml"
+
+  # Diagnostic helper
+  install -vDm 755 "$srcdir/sc200pc-libcamera-check" \
+    "$pkgdir/usr/bin/sc200pc-libcamera-check"
 }

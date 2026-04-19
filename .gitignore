@@ -4,7 +4,3 @@ packaging/*/src/
 packaging/*/*.pkg.tar.zst
 packaging/*/libcamera/
 
-# libcamera-sc200pc build inputs fetched by makepkg
-packaging/libcamera-sc200pc/libcamera-fix-python3.14-macro-redefinition.patch
-packaging/libcamera-sc200pc/libcamera-sc200pc.patch
-packaging/libcamera-sc200pc/build/
