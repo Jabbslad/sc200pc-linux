@@ -41,6 +41,7 @@
 #define SC200PC_REG_EXPOSURE_H		0x3e00
 #define SC200PC_REG_EXPOSURE_M		0x3e01
 #define SC200PC_REG_EXPOSURE_L		0x3e02
+#define SC200PC_REG_ANALOGUE_GAIN_COARSE	0x3e08
 #define SC200PC_REG_ANALOGUE_GAIN	0x3e09
 #define SC200PC_REG_BLACK_LEVEL		0x3901
 
@@ -99,24 +100,22 @@
 #define SC200PC_EXPOSURE_MAX		(SC200PC_VTS_DEF - SC200PC_EXPOSURE_MAX_MARGIN)
 #define SC200PC_EXPOSURE_DEFAULT	0x08b0
 #define SC200PC_ANALOGUE_GAIN_MIN	0x10
-#define SC200PC_ANALOGUE_GAIN_MAX	0x80	/* true hardware analogue max = 8.0x */
+#define SC200PC_ANALOGUE_GAIN_MAX	0xf8	/* 8x coarse * 1.94x fine, as Windows clamps */
 /*
  * The driver advertises V4L2_CID_ANALOGUE_GAIN as a total gain request,
- * not as pure hardware analogue gain. Requests up to 0x80 are programmed
- * fully as analogue gain; above 0x80, the driver clamps analogue gain at
- * its true hardware maximum and spills the excess into the digital-gain
- * registers. This keeps libcamera's simple AGC working at 30 fps without
- * needing userspace changes to explicitly drive digital gain.
+ * not as pure hardware analogue gain. Requests up to 0xf8 are programmed
+ * fully as analogue gain; above that, the driver holds analogue gain at its
+ * hardware maximum (15.5x) and makes up the rest with digital gain, which
+ * the silicon caps at 8x. This keeps libcamera's simple AGC working at
+ * 30 fps without needing userspace changes to explicitly drive digital gain.
  *
  * Control scale matches the existing SC200PC helper model: gain code / 16.
- * Examples (values in between are produced smoothly via the digital-gain
- * fine register, not just the coarse steps below):
+ * Examples:
  *   0x10 = 1.0x total gain    -> analogue 1.0x, digital 1.0x
  *   0x80 = 8.0x total gain    -> analogue 8.0x, digital 1.0x
- *   0x100 = 16.0x total gain  -> analogue 8.0x, digital 2.0x
- *   0x400 = 64.0x total gain  -> analogue 8.0x, digital 8.0x
- *   0x600 = 96.0x total gain  -> analogue 8.0x, digital 8.0x coarse x 1.5x fine
- *   0x800 = 128.0x total gain -> analogue 8.0x, digital 16.0x
+ *   0xf8 = 15.5x total gain   -> analogue 15.5x, digital 1.0x
+ *   0x400 = 64.0x total gain  -> analogue 15.5x, digital ~4.1x
+ *   0x800 = 128.0x requested  -> analogue 15.5x, digital 8.0x (~124x)
  */
 #define SC200PC_TOTAL_GAIN_MAX		0x800	/* 128.0x total via analogue+digital */
 #define SC200PC_ANALOGUE_GAIN_DEFAULT	0x10
@@ -133,6 +132,7 @@
 #define SC200PC_DIGITAL_GAIN_MIN	128
 #define SC200PC_DIGITAL_GAIN_MAX	4096	/* 32.0x */
 #define SC200PC_DIGITAL_GAIN_DEFAULT	128
+#define SC200PC_DIGITAL_GAIN_SILICON_MAX	1024	/* 0x3e06 aliases above 0x07 */
 
 /* VTS register pair (big-endian 16-bit). */
 #define SC200PC_REG_VTS_H		0x320e
@@ -509,12 +509,36 @@ static int sc200pc_set_exposure(struct sc200pc *sensor, u32 exposure)
 				 (exposure & 0x0f) << 4);
 }
 
-static int sc200pc_set_analogue_gain(struct sc200pc *sensor, u32 gain)
+/*
+ * Analogue gain encoding, measured on silicon (see sc200pc-linux issue #1):
+ *   0x3e08 = coarse octave, thermometer-coded: 0x00/0x01/0x03/0x07 = 1/2/4/8x
+ *   0x3e09 = fine step within the octave: 0x10..0x1f = fine/16 (1.0..1.94x)
+ * Writing a linear code into 0x3e09 alone is ignored above 0x1f, which left
+ * every request at ~1x. Returns the gain actually programmed, in 1/16 units.
+ */
+static int sc200pc_set_analogue_gain(struct sc200pc *sensor, u32 gain,
+				     u32 *applied)
 {
+	static const u8 coarse_map[] = { 0x00, 0x01, 0x03, 0x07 };
+	unsigned int idx = 0;
+	u32 fine;
+	int ret;
+
 	gain = clamp_t(u32, gain,
 		       SC200PC_ANALOGUE_GAIN_MIN, SC200PC_ANALOGUE_GAIN_MAX);
-	return sc200pc_write_reg(sensor, SC200PC_REG_ANALOGUE_GAIN,
-				 gain & 0xff);
+
+	while (idx + 1 < ARRAY_SIZE(coarse_map) && gain >= (0x20u << idx))
+		idx++;
+
+	fine = clamp_t(u32, gain >> idx, 0x10, 0x1f);
+	*applied = fine << idx;
+
+	ret = sc200pc_write_reg(sensor, SC200PC_REG_ANALOGUE_GAIN_COARSE,
+				coarse_map[idx]);
+	if (ret)
+		return ret;
+
+	return sc200pc_write_reg(sensor, SC200PC_REG_ANALOGUE_GAIN, fine);
 }
 
 /*
@@ -570,13 +594,12 @@ static int sc200pc_set_digital_gain(struct sc200pc *sensor, u32 gain)
  *
  * Userspace sees a single monotonic V4L2_CID_ANALOGUE_GAIN control. The
  * driver turns that into:
- *   - analogue gain only, up to the true hardware analogue limit (0x80)
- *   - analogue gain pinned at 0x80 plus digital gain, above that limit
+ *   - analogue gain only, up to the hardware analogue limit (0xf8)
+ *   - analogue gain at that limit plus digital gain, above it
  *
- * The split is intentionally simple: once analogue gain is saturated, the
- * requested total gain code is written straight into the digital-gain path.
- * This preserves the existing helper/libcamera gain scale while giving the
- * simple AGC more headroom at fixed 30 fps.
+ * Analogue gain is quantised to the sensor's octave + fine steps, so the
+ * digital stage is computed from the analogue gain actually programmed and
+ * also absorbs that rounding.
  */
 static int sc200pc_set_total_gain(struct sc200pc *sensor, u32 gain)
 {
@@ -587,25 +610,21 @@ static int sc200pc_set_total_gain(struct sc200pc *sensor, u32 gain)
 	gain = clamp_t(u32, gain,
 		       SC200PC_ANALOGUE_GAIN_MIN, SC200PC_TOTAL_GAIN_MAX);
 
-	if (gain <= SC200PC_ANALOGUE_GAIN_MAX) {
-		analogue_gain = gain;
-		digital_gain = SC200PC_DIGITAL_GAIN_DEFAULT;
-	} else {
-		/*
-		 * Treat V4L2_CID_ANALOGUE_GAIN as total requested gain. Above the
-		 * true hardware analogue limit (8x = 0x80), spill the remainder into
-		 * the SmartSens-family digital gain path. In this control scale, the
-		 * digital-gain code equals the requested total-gain code.
-		 */
-		analogue_gain = SC200PC_ANALOGUE_GAIN_MAX;
-		digital_gain = gain;
-	}
-
-	ret = sc200pc_set_digital_gain(sensor, digital_gain);
+	/*
+	 * Treat V4L2_CID_ANALOGUE_GAIN as total requested gain: fill the
+	 * analogue stage first, then make up the remainder with digital gain
+	 * (128 = 1.0x), which the silicon caps at 8x.
+	 */
+	ret = sc200pc_set_analogue_gain(sensor, gain, &analogue_gain);
 	if (ret)
 		return ret;
 
-	return sc200pc_set_analogue_gain(sensor, analogue_gain);
+	digital_gain = DIV_ROUND_CLOSEST(gain * SC200PC_DIGITAL_GAIN_DEFAULT,
+					 analogue_gain);
+	digital_gain = clamp_t(u32, digital_gain, SC200PC_DIGITAL_GAIN_MIN,
+			       SC200PC_DIGITAL_GAIN_SILICON_MAX);
+
+	return sc200pc_set_digital_gain(sensor, digital_gain);
 }
 
 static int sc200pc_apply_controls(struct sc200pc *sensor)
